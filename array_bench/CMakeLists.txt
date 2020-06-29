@@ -1,0 +1,1 @@
+ADD_PMWCAS_BENCHMARK(array_bench)
