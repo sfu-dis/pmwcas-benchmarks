@@ -64,4 +64,6 @@ endif()
 
 enable_testing()
 
+include_directories(utils)
+
 add_subdirectory(array_bench)

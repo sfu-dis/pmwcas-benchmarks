@@ -8,9 +8,8 @@
 #include <iostream>
 #include <string>
 
-#include "../benchmark.h"
-#include "../random_number_generator.h"
-// #include "util/core_local.h"
+#include "../utils/benchmark.h"
+#include "../utils/random_number_generator.h"
 
 typedef MwcTargetField<uint64_t> CasPtr;
 
