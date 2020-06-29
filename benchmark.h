@@ -8,11 +8,11 @@
 #include <deque>
 #include <thread>
 #include <vector>
+#include <pmwcas.h>
 
-#include "common/environment_internal.h"
+using namespace pmwcas;
+
 #include "macros.h"
-
-namespace benchmark {
 
 /// Glue to make running multi - threaded benchmarks easier.Classes subclass
 /// this and provide a Main(), Setup(), Teardown(), and Dump() method.
@@ -86,7 +86,7 @@ class Benchmark {
       Dump(thread_count, 0, unique_dump_id, false);
     }
 
-    VLOG(1) << "Starting benchmark.";
+    LOG(INFO) << "Starting benchmark.";
 
     // Start the benchmark
     uint64_t start = Environment::Get()->NowMicros();
@@ -132,7 +132,7 @@ class Benchmark {
       ;
     unique_dump_id = __rdtsc();
 
-    VLOG(1) << "Benchmark stopped.";
+    LOG(INFO) << "Benchmark stopped.";
 
     Dump(thread_count, end_ - start, unique_dump_id, true);
 
@@ -209,5 +209,3 @@ class Benchmark {
   /// Number of metrics dumps that have been done so far
   uint64_t dump_count_;
 };
-
-}  // namespace benchmark
