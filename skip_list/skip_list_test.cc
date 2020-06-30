@@ -26,8 +26,7 @@ struct PMDKRootObj {
 
 const uint32_t descriptor_pool_size = 100000;
 const uint32_t initial_max_height = 32;
-DEFINE_string(pmdk_pool, "/mnt/pmem0/skip_list_test_pool",
-              "path to pmdk pool");
+DEFINE_string(pmdk_pool, "skip_list_test_pool", "path to pmdk pool");
 
 static void GenerateSliceFromInt(int64_t k, char *out) {
   int64_t swapped = _bswap64(k);
