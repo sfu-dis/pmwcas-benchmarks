@@ -1,4 +1,5 @@
 # PMwCAS Benchmark
+[![Build Status](https://dev.azure.com/haoxiangpeng/pmwcas/_apis/build/status/sfu-dis.pmwcas-benchmarks?branchName=master)](https://dev.azure.com/haoxiangpeng/pmwcas/_build/latest?definitionId=5&branchName=master)
 
 (todo)
 
