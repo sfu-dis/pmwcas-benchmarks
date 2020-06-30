@@ -68,3 +68,4 @@ include_directories(utils)
 
 add_subdirectory(array_bench)
 add_subdirectory(doubly_linked_list)
+add_subdirectory(skip_list)

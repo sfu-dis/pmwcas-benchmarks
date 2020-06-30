@@ -11,6 +11,8 @@
 
 #include "macros.h"
 
+namespace pmwcas {
+
 /// Run-time check to ensure a narrowing conversion is safe.
 template <class Narrow, class Wide>
 Narrow narrow(const Wide& wide) {
@@ -253,3 +255,4 @@ class PerformanceTest {
   /// if use_worker_statistics_ is true.
   std::vector<WorkerStatistics> worker_statistics_;
 };
+}
