@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link rel="stylesheet" href="styles.css">
+    <title>Continuos Benchmark</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue"></script>
+    <!--[if IE]><link rel="shortcut icon" href="/static/img/icons/favicon.ico"><![endif]-->
+</head>
+
+<body>
+    <div id="app">
+        {{ message }}
+
+        <div id="main" style="width: 600px;height:400px;"></div>
+    </div>
+</body>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@4.4.0/dist/echarts.min.js"></script>
+<script>
+    var app = new Vue({
+        el: '#app',
+        data: {
+            message: ''
+        }
+    })
+</script>
+
+<script async>
+    async function fetchData(url) {
+        const response = await fetch(url);
+        const data = await response.json();
+        console.log(data);
+        return data
+    }
+
+    let myChart = echarts.init(document.getElementById('main'));
+
+    (async () => {
+        const benchmark = await fetchData("data.json");
+        option = {
+            title: {
+                text: `${benchmark.project} - Continuos Benchmark`,
+                x: 'center'
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: {
+                    animation: true
+                },
+                position: function (point, params, dom, rect, size) {
+                    // fixed at top
+                    return [point[0] - 50, '10%'];
+                },
+                enterable: true,
+                textStyle: {
+                    fontFamily: 'SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace'
+                },
+                formatter: function (params) {
+                    const dataPoint = benchmark.data[params[0].dataIndex];
+                    return `Total: ${(dataPoint.ops / 1000000).toFixed(2)} M/s<br/>
+                    Success: ${(dataPoint.success / 1000000).toFixed(2)} M/s<br/>
+                    Git Tag: <a href=${benchmark.githubEndpoint}${dataPoint.gitTag} target="_blank"> ${dataPoint.gitTag}</a><br/>
+                    BuildID: <a href=${benchmark.ciEndpoint}${dataPoint.buildId} target="_blank"> ${dataPoint.buildId}</a>`;
+                }
+            },
+            toolbox: {
+                feature: {
+                    dataView: {
+                        show: true,
+                        title: 'Data View'
+                    },
+                    restore: {
+                        title: 'reset'
+                    },
+                    saveAsImage: {
+                        title: 'save',
+                        show: true
+                    }
+                }
+            },
+            dataZoom: [
+                {
+                    id: 'dataZoomX',
+                    type: 'slider',
+                    xAxisIndex: [0],
+                    filterMode: 'filter'
+                }],
+            xAxis: {
+                type: 'category',
+                name: "Build ID",
+                data: benchmark.data.map(x => x.buildId)
+            },
+            yAxis: {
+                type: 'value',
+                name: "Throughput",
+                axisLabel: {
+                    formatter: function (value) {
+                        return (value / 1000000).toFixed(2) + ' M';
+                    }
+                }
+            },
+            series: [{
+                data: benchmark.data.map(x => x.ops),
+                type: 'line',
+                name: 'operations'
+            },
+            {
+                data: benchmark.data.map(x => x.success),
+                type: 'line',
+                name: 'success'
+            }]
+        };
+        myChart.setOption(option);
+    })();
+</script>
+
+<script src="main.js"></script>
+
+</html>
