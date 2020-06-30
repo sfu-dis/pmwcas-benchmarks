@@ -266,8 +266,8 @@ GTEST_TEST(DSkipListTest, MwCASConcurrentTest) {
 int main(int argc, char** argv) {
   FLAGS_logtostderr = 1;
   google::InitGoogleLogging(argv[0]);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
   ::testing::InitGoogleTest(&argc, argv);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 #ifdef PMDK
   pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(FLAGS_pmdk_pool.c_str(),
                                                     "skip_list_layout",
