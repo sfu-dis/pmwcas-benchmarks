@@ -1,6 +1,6 @@
 #pragma once
 // #include "common/allocator_internal.h"
-#include  <pmwcas.h>
+#include <pmwcas.h>
 
 #include "../utils/random_number_generator.h"
 #include "pm_alloc_helper.h"
@@ -27,18 +27,19 @@ namespace pmwcas {
 
 /// Describes a node in a skip list - common to all implementations.
 /// The node content is laid out as:
-/// [key, next, prev, etc. fields][padding to cacheline size][Key bytes][Payload bytes]
-/// Key bytes starts after the padding. The first key byte is pointed to by key.data_.
+/// [key, next, prev, etc. fields][padding to cacheline size][Key bytes][Payload
+/// bytes] Key bytes starts after the padding. The first key byte is pointed to
+/// by key.data_.
 struct SkipListNode {
   static const uint32_t kInvalidLevel = 0;
   static const uint32_t kLevelAbondoned = ~uint32_t{0};
   // Note: next, prev, lower, and level should be put together, so a single
   // NVRAM::Flush() is enough to flush them all.
-  SkipListNode* next;   // next node in the same level
-  SkipListNode* prev;   // previous node in the same level
-  SkipListNode* lower;  // lower level node in the same tower
-  SkipListNode* upper;  // upper level node in the same tower
-  volatile uint32_t level;        // levels grow upward from 1
+  SkipListNode* next;       // next node in the same level
+  SkipListNode* prev;       // previous node in the same level
+  SkipListNode* lower;      // lower level node in the same tower
+  SkipListNode* upper;      // upper level node in the same tower
+  volatile uint32_t level;  // levels grow upward from 1
   uint32_t payload_size;
 #ifdef PMDK
   char padding[48 - 40];
@@ -47,11 +48,15 @@ struct SkipListNode {
 #endif
   Slice key;
 
-  SkipListNode(const Slice& key_to_copy, uint32_t psize, bool copy_key = true) :
-    next(nullptr), prev(nullptr), lower(nullptr), upper(nullptr), level(kInvalidLevel),
-    payload_size(psize) {
+  SkipListNode(const Slice& key_to_copy, uint32_t psize, bool copy_key = true)
+      : next(nullptr),
+        prev(nullptr),
+        lower(nullptr),
+        upper(nullptr),
+        level(kInvalidLevel),
+        payload_size(psize) {
     // Copy the key
-    if(copy_key) {
+    if (copy_key) {
       key.data_ = (char*)this + sizeof(*this);
       memcpy((char*)key.data_, key_to_copy.data(), key_to_copy.size());
       key.size_ = key_to_copy.size();
@@ -69,10 +74,10 @@ struct SkipListNode {
   /// Note that high level nodes don't have payload.
   inline char* GetPayload() {
     DCHECK(level == 1);
-    return (char *)this + sizeof(*this) + key.size();
+    return (char*)this + sizeof(*this) + key.size();
   }
   inline uint32_t Size() {
-    if(key.data_ == (char*)this + sizeof(*this)) {
+    if (key.data_ == (char*)this + sizeof(*this)) {
       return sizeof(*this) + payload_size + key.size();
     } else {
       return sizeof(*this);
@@ -105,19 +110,23 @@ class ISkipList {
 
   ISkipList(int sync, uint32_t max_height);
 
-  ISkipList(int sync_method, uint32_t max_height,
-            SkipListNode* head, SkipListNode* tail) :
-            sync_method_(sync_method), max_height_(max_height),
-            head_(head), tail_(tail) {}
+  ISkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+            SkipListNode* tail)
+      : sync_method_(sync_method),
+        max_height_(max_height),
+        head_(head),
+        tail_(tail) {}
 
   /// Insert [key, value] to the skip list.
-  virtual Status Insert(const Slice& key, const Slice& value, bool already_protected) = 0;
+  virtual Status Insert(const Slice& key, const Slice& value,
+                        bool already_protected) = 0;
 
   /// Delete [key] from the skip list.
   virtual Status Delete(const Slice& key, bool already_protected) = 0;
 
   /// Find the value of [key], result stored in [value].
-  virtual Status Search(const Slice& key, SkipListNode** value_node, bool already_protected) = 0;
+  virtual Status Search(const Slice& key, SkipListNode** value_node,
+                        bool already_protected) = 0;
 
   inline int GetSyncMethod() { return sync_method_; }
   inline SkipListNode* GetTail() { return tail_; }
@@ -128,12 +137,13 @@ class ISkipList {
   static const int kSyncPCAS = 3;
 
  public:
-  /// Indicates the node pointed to is leaving the list (used on SkipListNode.next)
+  /// Indicates the node pointed to is leaving the list (used on
+  /// SkipListNode.next)
   static const uint64_t kNodeDeleted = ((uint64_t)1 << 60);
 
   int sync_method_;
-  /// The number of head/tail sentinel nodes to preallocate. Search starts from the
-  /// height_-th head node.
+  /// The number of head/tail sentinel nodes to preallocate. Search starts from
+  /// the height_-th head node.
   uint32_t max_height_;
 
   SkipListNode* head_;  // top node of the left-most tower, search starts here
@@ -143,69 +153,72 @@ class ISkipList {
 struct DSkipListCursor;
 
 class DSkipList : public ISkipList {
- friend struct DSkipListCursor;
+  friend struct DSkipListCursor;
 
- struct PathStack {
-   static const uint32_t kMaxFrames = 128;
-   SkipListNode* frames[kMaxFrames];
-   uint32_t count;
+  struct PathStack {
+    static const uint32_t kMaxFrames = 128;
+    SkipListNode* frames[kMaxFrames];
+    uint32_t count;
 
-   PathStack() : count(0) {}
-   SkipListNode* operator[](uint32_t index) { return frames[index]; }
-   inline void Reset() { count = 0; }
-   inline void Push(SkipListNode* node) {
-     RAW_CHECK(count + 1 < kMaxFrames, "too many frames");
-     frames[count] = node;
-     count++;
-   }
-   inline SkipListNode* Pop() { return frames[--count]; }
-   inline uint32_t Size() { return count; }
- };
+    PathStack() : count(0) {}
+    SkipListNode* operator[](uint32_t index) { return frames[index]; }
+    inline void Reset() { count = 0; }
+    inline void Push(SkipListNode* node) {
+      RAW_CHECK(count + 1 < kMaxFrames, "too many frames");
+      frames[count] = node;
+      count++;
+    }
+    inline SkipListNode* Pop() { return frames[--count]; }
+    inline uint32_t Size() { return count; }
+  };
 
  protected:
 #ifdef PMEM
-  static const uint64_t kDirtyFlag  = Descriptor::kDirtyFlag;
+  static const uint64_t kDirtyFlag = Descriptor::kDirtyFlag;
   inline SkipListNode* ReadPersist(SkipListNode** node) {
     // DCHECK(GetSyncMpethod() == kSyncPCAS);
     auto* node_ptr = *node;
-    if((uint64_t)node_ptr & kDirtyFlag) {
+    if ((uint64_t)node_ptr & kDirtyFlag) {
       NVRAM::Flush(sizeof(uint64_t), (void*)node);
-      CompareExchange64Ptr(node, (SkipListNode*)((uint64_t)node_ptr & ~kDirtyFlag), node_ptr);
+      CompareExchange64Ptr(
+          node, (SkipListNode*)((uint64_t)node_ptr & ~kDirtyFlag), node_ptr);
     }
     return (SkipListNode*)((uint64_t)node_ptr & ~kDirtyFlag);
   }
 #else
-  static const uint64_t kDirtyFlag  = 0;
+  static const uint64_t kDirtyFlag = 0;
 #endif
 
   Status Find(const Slice& key, SkipListNode** value_node);
 
-  /// Thread-local list of all level 2 and higher nodes visited during a Find operation
-  inline PathStack* GetTlsPathStack() { 
+  /// Thread-local list of all level 2 and higher nodes visited during a Find
+  /// operation
+  inline PathStack* GetTlsPathStack() {
     thread_local PathStack stack;
     return &stack;
   }
 
  public:
-  DSkipList(int sync, uint32_t initial_max_height) :
-    ISkipList(sync, initial_max_height) {
+  DSkipList(int sync, uint32_t initial_max_height)
+      : ISkipList(sync, initial_max_height) {
     tail_->prev = head_;
   }
 
-  DSkipList(int sync_method, uint32_t max_height,
-            SkipListNode* head, SkipListNode* tail) :
-      ISkipList(sync_method, max_height, head, tail) {}
+  DSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+            SkipListNode* tail)
+      : ISkipList(sync_method, max_height, head, tail) {}
 
   void Print();
 
-  /// XXX(tzwang): It appears calling the GetValueProtected function is quite 
+  /// XXX(tzwang): It appears calling the GetValueProtected function is quite
   /// expensive for skiplist; take a look first then decide if we call it.
   inline SkipListNode* ResolveNodePointer(SkipListNode** node) {
     SkipListNode* n = *node;
-    if(MwcTargetField<uint64_t>::IsCleanPtr((uint64_t)n)) {
+    if (MwcTargetField<uint64_t>::IsCleanPtr((uint64_t)n)) {
       return n;
     }
-    return (SkipListNode*)(((MwcTargetField<uint64_t>*)node)->GetValueProtected());
+    return (
+        SkipListNode*)(((MwcTargetField<uint64_t>*)node)->GetValueProtected());
   }
 
   inline SkipListNode* GetHead() { return READ(head_); }
@@ -233,39 +246,41 @@ class CASDSkipList : public DSkipList {
  public:
 #ifdef PMEM
 #if defined(MwCASSafeAlloc)
-  CASDSkipList(uint32_t initial_max_height, DescriptorPool* pool) :
-    DSkipList(kSyncPCAS, initial_max_height), descriptor_pool_(pool) {}
+  CASDSkipList(uint32_t initial_max_height, DescriptorPool* pool)
+      : DSkipList(kSyncPCAS, initial_max_height), descriptor_pool_(pool) {}
 
-  CASDSkipList(int sync_method, uint32_t max_height,
-                SkipListNode* head, SkipListNode* tail, DescriptorPool* pool) :
-    DSkipList(sync_method, max_height, head, tail), descriptor_pool_(pool) {}
+  CASDSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+               SkipListNode* tail, DescriptorPool* pool)
+      : DSkipList(sync_method, max_height, head, tail),
+        descriptor_pool_(pool) {}
 #else
-  CASDSkipList(uint32_t initial_max_height) :
-    DSkipList(kSyncPCAS, initial_max_height) {
-      Status s = epoch_.Initialize();
-      RAW_CHECK(s.ok(), "epoch init failure");
+  CASDSkipList(uint32_t initial_max_height)
+      : DSkipList(kSyncPCAS, initial_max_height) {
+    Status s = epoch_.Initialize();
+    RAW_CHECK(s.ok(), "epoch init failure");
 #if defined(EBRSafeAlloc)
-      auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
-      bool ok = garbage_list_.Initialize(&epoch_, allocator->GetPool(), 1024 * 8);
-      RAW_CHECK(ok, "garbage list init failure");
+    auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
+    bool ok = garbage_list_.Initialize(&epoch_, allocator->GetPool(), 1024 * 8);
+    RAW_CHECK(ok, "garbage list init failure");
 #endif
-    }
-  CASDSkipList(int sync_method, uint32_t max_height,
-                SkipListNode* head, SkipListNode* tail) :
-    DSkipList(sync_method, max_height, head, tail) {}
+  }
+  CASDSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+               SkipListNode* tail)
+      : DSkipList(sync_method, max_height, head, tail) {}
 #endif
 #else
-  CASDSkipList(uint32_t initial_max_height) :
-    DSkipList(kSyncCAS, initial_max_height) {
-      Status s = epoch_.Initialize();
-      RAW_CHECK(s.ok(), "epoch init failure");
-    }
-  CASDSkipList(int sync_method, uint32_t max_height,
-                SkipListNode* head, SkipListNode* tail) :
-    DSkipList(sync_method, max_height, head, tail) {}
+  CASDSkipList(uint32_t initial_max_height)
+      : DSkipList(kSyncCAS, initial_max_height) {
+    Status s = epoch_.Initialize();
+    RAW_CHECK(s.ok(), "epoch init failure");
+  }
+  CASDSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+               SkipListNode* tail)
+      : DSkipList(sync_method, max_height, head, tail) {}
 #endif
 
-  virtual Status Insert(const Slice& key, const Slice& value, bool already_protected) override;
+  virtual Status Insert(const Slice& key, const Slice& value,
+                        bool already_protected) override;
   virtual Status Delete(const Slice& key, bool already_protected) override;
   virtual inline EpochManager* GetEpoch() override {
 #if defined(PMEM) && defined(MwCASSafeAlloc)
@@ -284,17 +299,17 @@ class CASDSkipList : public DSkipList {
 #endif
     DCHECK(node != &head_->next);
     DCHECK(node != &tail_->prev);
-    while(true) {
+    while (true) {
 #ifdef PMEM
       SkipListNode* node_ptr = ResolveNodePointer(node);
 #else
       SkipListNode* node_ptr = *node;
 #endif
-      if((uint64_t)node_ptr & kNodeDeleted) {
+      if ((uint64_t)node_ptr & kNodeDeleted) {
         return;
       }
       auto* desired = (SkipListNode*)((uint64_t)node_ptr | flags);
-      if(node_ptr == CompareExchange64Ptr(node, desired, node_ptr)) {
+      if (node_ptr == CompareExchange64Ptr(node, desired, node_ptr)) {
 #ifdef PMEM
         ReadPersist(node);
 #endif
@@ -328,15 +343,14 @@ class CASDSkipList : public DSkipList {
 #if defined(PMEM) && defined(EBRSafeAlloc)
   very_pm::GarbageList garbage_list_;
 
-  inline very_pm::GarbageList *GetGarbageList() {
-    return &garbage_list_;
-  }
+  inline very_pm::GarbageList* GetGarbageList() { return &garbage_list_; }
 #else
-  // Thread-local garbage_list to avoid contention under high core counts (eg >18)
+  // Thread-local garbage_list to avoid contention under high core counts (eg
+  // >18)
   inline GarbageListUnsafe* GetGarbageList() {
     thread_local GarbageListUnsafe garbage_list;
     thread_local bool initialized = false;
-    if(!initialized) {
+    if (!initialized) {
       auto s = garbage_list.Initialize(&epoch_);
       RAW_CHECK(s.ok(), "garbage list init failure");
       initialized = true;
@@ -346,33 +360,40 @@ class CASDSkipList : public DSkipList {
 #endif
 #endif
 
-  /// Helper function similar to (almost the same) as the one in CAS-based doubly-linked list.
+  /// Helper function similar to (almost the same) as the one in CAS-based
+  /// doubly-linked list.
   SkipListNode* CorrectPrev(SkipListNode* prev, SkipListNode* node);
 
   /// Helper function for Insert() that inserts higher level (>1) nodes.
   void FinishInsert(SkipListNode* node);
 
-  /// Helper function for Delete() to delete a specific node; works at any tower level.
+  /// Helper function for Delete() to delete a specific node; works at any tower
+  /// level.
   virtual bool DeleteNode(SkipListNode* node) override;
 };
 
-/// A lock-free skip list implementation using doubly-linked list and multi-word CAS
+/// A lock-free skip list implementation using doubly-linked list and multi-word
+/// CAS
 class MwCASDSkipList : public DSkipList {
  public:
   DescriptorPool* descriptor_pool_;
 
  public:
-  MwCASDSkipList(uint32_t initial_max_height, DescriptorPool* pool):
-    DSkipList(kSyncMwCAS, initial_max_height), descriptor_pool_(pool) {}
+  MwCASDSkipList(uint32_t initial_max_height, DescriptorPool* pool)
+      : DSkipList(kSyncMwCAS, initial_max_height), descriptor_pool_(pool) {}
 
-  MwCASDSkipList(int sync_method, uint32_t max_height,
-                SkipListNode* head, SkipListNode* tail, DescriptorPool* pool) :
-    DSkipList(sync_method, max_height, head, tail), descriptor_pool_(pool) {}
+  MwCASDSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
+                 SkipListNode* tail, DescriptorPool* pool)
+      : DSkipList(sync_method, max_height, head, tail),
+        descriptor_pool_(pool) {}
 
-  virtual Status Insert(const Slice& key, const Slice& value, bool already_protected) override;
+  virtual Status Insert(const Slice& key, const Slice& value,
+                        bool already_protected) override;
   virtual Status Delete(const Slice& key, bool already_protected) override;
-  
-  virtual inline EpochManager* GetEpoch() override { return descriptor_pool_->GetEpoch(); }
+
+  virtual inline EpochManager* GetEpoch() override {
+    return descriptor_pool_->GetEpoch();
+  }
 
   /// Figure out the next node still valid after [node]
   virtual inline SkipListNode* GetNext(SkipListNode* node) override {
@@ -387,16 +408,18 @@ class MwCASDSkipList : public DSkipList {
     return (SkipListNode*)((uint64_t)prev & ~kNodeDeleted);
   }
 
-  inline virtual Status Search(
-    const Slice& key, SkipListNode** value_node, bool already_protected) override {
+  inline virtual Status Search(const Slice& key, SkipListNode** value_node,
+                               bool already_protected) override {
     EpochGuard guard(GetEpoch(), !already_protected);
     return Find(key, value_node);
   }
+
  private:
   /// Helper function for Insert() that inserts higher level (>1) nodes.
   void FinishInsert(SkipListNode* node);
 
-  /// Helper function for Delete() to delete a specific node; works at any tower level.
+  /// Helper function for Delete() to delete a specific node; works at any tower
+  /// level.
   virtual bool DeleteNode(SkipListNode* node) override;
 };
 
@@ -412,7 +435,7 @@ struct DSkipListCursor {
   }
   inline SkipListNode* Prev() {
     RAW_CHECK(curr_node->level == 1, "invalid level");
-    if(curr_node->IsHead()) {
+    if (curr_node->IsHead()) {
       return nullptr;
     }
     curr_node = list->GetPrev(curr_node);
@@ -420,15 +443,15 @@ struct DSkipListCursor {
   }
 
   /// Start from [key] till the end of the list
-  DSkipListCursor(DSkipList* list, const Slice& key, bool already_protected) :
-    list(list), curr_node(nullptr), unprot(false) {
-    if(!already_protected) {
+  DSkipListCursor(DSkipList* list, const Slice& key, bool already_protected)
+      : list(list), curr_node(nullptr), unprot(false) {
+    if (!already_protected) {
       list->GetEpoch()->Protect();
       unprot = true;
     }
     auto s = list->Find(key, &curr_node);
     RAW_CHECK(curr_node, "invalid cursor start node");
-    while(curr_node->level > 1) {
+    while (curr_node->level > 1) {
       curr_node = curr_node->lower;
     }
     RAW_CHECK(curr_node->level == 1, "invalid level");
@@ -436,24 +459,25 @@ struct DSkipListCursor {
 
   /// Start from the very end/beginning
   DSkipListCursor(DSkipList* list, bool already_protected, bool reverse)
-   : list(list), curr_node(nullptr), unprot(false) {
+      : list(list), curr_node(nullptr), unprot(false) {
 #ifdef PMEM
-    curr_node = reverse ? list->ResolveNodePointer(&list->tail_) : list->ResolveNodePointer(&list->head_);
+    curr_node = reverse ? list->ResolveNodePointer(&list->tail_)
+                        : list->ResolveNodePointer(&list->head_);
 #else
     curr_node = reverse ? list->tail_ : list->head_;
 #endif
-    if(!already_protected) {
+    if (!already_protected) {
       list->GetEpoch()->Protect();
       unprot = true;
     }
     RAW_CHECK(curr_node, "invalid cursor start node");
-    while(curr_node->level > 1) {
+    while (curr_node->level > 1) {
       curr_node = curr_node->lower;
     }
     RAW_CHECK(curr_node->level == 1, "invalid level");
   }
   ~DSkipListCursor() {
-    if(unprot) {
+    if (unprot) {
       list->GetEpoch()->Unprotect();
     }
   }
