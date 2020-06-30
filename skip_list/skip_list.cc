@@ -621,7 +621,7 @@ retry:
   uint32_t alloc_size = sizeof(SkipListNode) + key.size() + value.size();
   uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&left->next, (uint64_t)right,
     Descriptor::kRecycleNewOnFailure);
-#if not (defined(PMEM) and defined(CtorCallback))
+
   Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
     alloc_size, kCacheLineSize);
   SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
@@ -635,20 +635,6 @@ retry:
 
 #ifdef PMEM
   NVRAM::Flush(node->Size(), node);
-#endif
-#else
-  auto al = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
-  al->Allocate((void **)desc.GetNewValuePtr(idx), alloc_size, [&](void *space) {
-    auto *node = new (space) SkipListNode(key, value.size());
-    node->level = 1;
-    memcpy(node->GetPayload(), value.data(), value.size());
-    DCHECK(node->lower == nullptr);
-
-    node->next = right;
-    node->prev = left;
-    // no need to flush - PMDK tx does that
-  });
-  SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
 #endif
 
   desc.AddEntry((uint64_t*)&right->prev, (uint64_t)left, (uint64_t)node);
@@ -700,7 +686,7 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
     uint32_t alloc_size = sizeof(SkipListNode) + node->key.size();
     uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&prev->next, (uint64_t)next,
       Descriptor::kRecycleNewOnFailure);
-#if not (defined(PMEM) and defined(CtorCallback))
+
     Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
       alloc_size, kCacheLineSize);
     SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
@@ -715,21 +701,7 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
 #ifdef PMEM
     NVRAM::Flush(n->Size(), n);
 #endif
-#else
-    auto al = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
-    al->Allocate((void **)desc.GetNewValuePtr(idx), alloc_size, [&](void *space) {
-      auto *n = new (space) SkipListNode(node->key, 0);
-      n->lower = node;
-      n->level = prev->level;
-      DCHECK(n->level == node->level + 1);
-      DCHECK(n->level == prev->level);
-      DCHECK(n->level == next->level);
-      n->prev = prev;
-      n->next = next;
-      // no need to flush - PMDK tx does that
-    });
-    SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
-#endif
+
     desc.AddEntry((uint64_t*)&node->upper, 0, (uint64_t)n);
     desc.AddEntry((uint64_t*)&next->prev, (uint64_t)prev, (uint64_t)n);
     if(!desc.MwCAS()) {
