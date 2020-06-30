@@ -1,9 +1,9 @@
 #pragma once
 
+#include <pmwcas.h>
+
 #include <atomic>
 #include <cstdint>
-
-#include <pmwcas.h>
 
 namespace pmwcas {
 struct PMAllocTable {

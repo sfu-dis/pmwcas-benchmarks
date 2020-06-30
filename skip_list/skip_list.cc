@@ -1,4 +1,5 @@
 #include "skip_list.h"
+
 #include "glog/raw_logging.h"
 
 #ifdef PMEM
@@ -11,30 +12,32 @@ static_assert(false, "Cannot have both reclamation mechanism");
 
 namespace pmwcas {
 
-ISkipList::ISkipList(int sync, uint32_t max_height) : sync_method_(sync), max_height_(max_height) {
-  RAW_CHECK(sync_method_ == kSyncMwCAS ||
-            sync_method_ == kSyncCAS ||
-            sync_method_ == kSyncPCAS, "invalid sync method.");
+ISkipList::ISkipList(int sync, uint32_t max_height)
+    : sync_method_(sync), max_height_(max_height) {
+  RAW_CHECK(sync_method_ == kSyncMwCAS || sync_method_ == kSyncCAS ||
+                sync_method_ == kSyncPCAS,
+            "invalid sync method.");
   // Preallocate a bunch of sentinel nodes; note however head_ points to the
   // sentinel node at the real current height, instead of max_height_.
 
   // FIXME(shiges): Ideally this should be wrapped in a PMDK tx, but
   // I don't really care how to do recovery if it crashes here...
   // Just make sure everything is on PM
-  Allocator::Get()->AllocateAligned((void**)&head_,
-    sizeof(SkipListNode) * max_height, kCacheLineSize);
-  char* head_memory = (char *)head_;
+  Allocator::Get()->AllocateAligned(
+      (void**)&head_, sizeof(SkipListNode) * max_height, kCacheLineSize);
+  char* head_memory = (char*)head_;
   memset(head_memory, 0, sizeof(SkipListNode) * max_height);
 
-  Allocator::Get()->AllocateAligned((void**)&tail_,
-    sizeof(SkipListNode) * max_height, kCacheLineSize);
-  char* tail_memory = (char *)tail_;
+  Allocator::Get()->AllocateAligned(
+      (void**)&tail_, sizeof(SkipListNode) * max_height, kCacheLineSize);
+  char* tail_memory = (char*)tail_;
   memset(tail_memory, 0, sizeof(SkipListNode) * max_height);
 
   Slice dummy_key;
-  tail_ = new(tail_memory) SkipListNode(dummy_key, 0);
-  head_ = new(head_memory) SkipListNode(dummy_key, 0);
-  head_->prev = head_->lower = tail_->lower = head_->upper = tail_->upper = nullptr;
+  tail_ = new (tail_memory) SkipListNode(dummy_key, 0);
+  head_ = new (head_memory) SkipListNode(dummy_key, 0);
+  head_->prev = head_->lower = tail_->lower = head_->upper = tail_->upper =
+      nullptr;
   head_->level = 1;
   tail_->level = 1;
   head_->next = tail_;
@@ -47,10 +50,12 @@ ISkipList::ISkipList(int sync, uint32_t max_height) : sync_method_(sync), max_he
   RAW_CHECK(head_->prev == nullptr, "invalid prev pointer in head node");
   for (uint32_t i = 2; i <= max_height_; ++i) {
     RAW_CHECK(head_->prev == nullptr, "invalid prev pointer in head node");
-    auto* head_n = head_lower->upper = (SkipListNode*)(head_memory + sizeof(SkipListNode) * (i-1));
-    new(head_n) SkipListNode(dummy_key, 0);
-    SkipListNode* tail_n = (SkipListNode*)(tail_memory + sizeof(SkipListNode) * (i-1));
-    new(tail_n) SkipListNode(dummy_key, 0);
+    auto* head_n = head_lower->upper =
+        (SkipListNode*)(head_memory + sizeof(SkipListNode) * (i - 1));
+    new (head_n) SkipListNode(dummy_key, 0);
+    SkipListNode* tail_n =
+        (SkipListNode*)(tail_memory + sizeof(SkipListNode) * (i - 1));
+    new (tail_n) SkipListNode(dummy_key, 0);
     head_n->level = tail_n->level = i;
 
     head_n->lower = head_lower;
@@ -75,10 +80,10 @@ ISkipList::ISkipList(int sync, uint32_t max_height) : sync_method_(sync), max_he
 
 void DSkipList::Print() {
   SkipListNode* curr_node = READ(head_);
-  while(true) {
+  while (true) {
     SkipListNode* curr_head = curr_node;
-    while(!curr_node->IsTail()) {
-      if(curr_node->IsHead()) {
+    while (!curr_node->IsTail()) {
+      if (curr_node->IsHead()) {
         printf("H");
       } else {
         printf(" %lx", *(uint64_t*)curr_node->key.data());
@@ -87,7 +92,7 @@ void DSkipList::Print() {
     }
     printf(" T\n");
     curr_node = curr_head->lower;
-    if(curr_node->level == 1) {
+    if (curr_node->level == 1) {
       break;
     }
   }
@@ -106,12 +111,13 @@ retry:
   DCHECK(false == curr_node->IsTail());
 
   auto* right = GetNext(curr_node);
-  if(right->IsTail()) {
+  if (right->IsTail()) {
   down:
     if (curr_node->level == 1) {
       DCHECK(curr_node->lower == nullptr);
       if (value_node) {
-        *value_node = curr_node;  // value_node will point to the left of the target
+        *value_node =
+            curr_node;  // value_node will point to the left of the target
       }
       return Status::NotFound();  // no luck
     } else {
@@ -126,10 +132,11 @@ retry:
     if (cmp == 0) {
       // Found it, descend (if needed) to level 1 and return
       SkipListNode* result = right;
-      if(GetSyncMethod() == kSyncCAS || GetSyncMethod() == kSyncPCAS) {
-        while(*&result->level == SkipListNode::kInvalidLevel) { /** spin **/ }
+      if (GetSyncMethod() == kSyncCAS || GetSyncMethod() == kSyncPCAS) {
+        while (*&result->level == SkipListNode::kInvalidLevel) { /** spin **/
+        }
       }
-      while(result->level > 1) {
+      while (result->level > 1) {
         DCHECK(result->key.compare(key) == 0);
         result = result->lower;
       }
@@ -149,7 +156,7 @@ retry:
 }
 
 /// GetNext code that follows the original paper; appears to be costly.
-/*
+#if 0
 SkipListNode* CASDSkipList::GetNext(SkipListNode* node) {
   DCHECK(GetEpoch()->IsProtected());
   while(true) {
@@ -182,19 +189,19 @@ SkipListNode* CASDSkipList::GetNext(SkipListNode* node) {
     return next;
   }
 }
-*/
+#endif
 
 SkipListNode* CASDSkipList::GetPrev(SkipListNode* node) {
   DCHECK(GetEpoch()->IsProtected());
   auto* list_head = READ(head_);
   // Descend to the right level
-  while(list_head->level != node->level) {
+  while (list_head->level != node->level) {
     list_head = list_head->lower;
   }
   DCHECK(list_head);
 
   while (true) {
-    if(node == list_head) {
+    if (node == list_head) {
       return nullptr;
     }
     auto* prev = CleanPtr(READ(node->prev));
@@ -210,14 +217,17 @@ SkipListNode* CASDSkipList::GetPrev(SkipListNode* node) {
   }
 }
 
-SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev, SkipListNode* node) {
+SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev,
+                                        SkipListNode* node) {
   DCHECK(GetEpoch()->IsProtected());
   DCHECK(((uint64_t)node & kNodeDeleted) == 0);
   SkipListNode* last_link = nullptr;
   while (true) {
-    // DCHECK(!((SkipListNode*)((uint64_t)READ(prev) & ~kNodeDeleted))->IsTail());
+    // DCHECK(!((SkipListNode*)((uint64_t)READ(prev) &
+    // ~kNodeDeleted))->IsTail());
     auto* link1 = READ(node->prev);
-    // DCHECK(!((SkipListNode*)((uint64_t)READ(link1) & ~kNodeDeleted))->IsTail());
+    // DCHECK(!((SkipListNode*)((uint64_t)READ(link1) &
+    // ~kNodeDeleted))->IsTail());
     if ((uint64_t)link1 & kNodeDeleted) {
       break;
     }
@@ -236,10 +246,12 @@ SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev, SkipListNode* node) 
         DCHECK(!((uint64_t)desired & kDirtyFlag));
         auto desc = descriptor_pool_->AllocateDescriptor();
         desc.AddEntry((uint64_t*)&last_link->next, (uint64_t)prev, desired,
-                       Descriptor::kRecycleOldOnSuccess);
+                      Descriptor::kRecycleOldOnSuccess);
         desc.MwCAS();
 #else
-        if(prev == CompareExchange64Ptr(&last_link->next, (SkipListNode*)(desired | kDirtyFlag), prev)) {
+        if (prev == CompareExchange64Ptr(&last_link->next,
+                                         (SkipListNode*)(desired | kDirtyFlag),
+                                         prev)) {
 #ifdef PMEM
           ReadPersist(&last_link->next);
 #endif
@@ -251,7 +263,8 @@ SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev, SkipListNode* node) 
         last_link = nullptr;
         continue;
       }
-      prev_next = (SkipListNode*)((uint64_t)READ(prev_cleared->prev) & ~kNodeDeleted);
+      prev_next =
+          (SkipListNode*)((uint64_t)READ(prev_cleared->prev) & ~kNodeDeleted);
       prev = prev_next;
       DCHECK(prev);
       continue;
@@ -263,7 +276,8 @@ SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev, SkipListNode* node) 
       prev = prev_next;
       continue;
     }
-    SkipListNode* p = (SkipListNode*)(((uint64_t)prev & ~kNodeDeleted) | kDirtyFlag);
+    SkipListNode* p =
+        (SkipListNode*)(((uint64_t)prev & ~kNodeDeleted) | kDirtyFlag);
     if (link1 == CompareExchange64Ptr(&node->prev, p, link1)) {
 #ifdef PMEM
       ReadPersist(&node->prev);
@@ -278,11 +292,13 @@ SkipListNode* CASDSkipList::CorrectPrev(SkipListNode* prev, SkipListNode* node) 
   return prev;
 }
 
-Status CASDSkipList::Insert(const Slice& key, const Slice& value, bool already_protected) {
+Status CASDSkipList::Insert(const Slice& key, const Slice& value,
+                            bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
 retry:
-  // Get the supposedly left node at level 1; a larger value might have been inserted
-  // after it by the time I start to install a new key, so must make sure later
+  // Get the supposedly left node at level 1; a larger value might have been
+  // inserted after it by the time I start to install a new key, so must make
+  // sure later
   SkipListNode* left = nullptr;
   SkipListNode* right = nullptr;
   auto ret = Find(key, &left);
@@ -291,7 +307,7 @@ retry:
     return Status::KeyAlreadyExists();
   } else {
     DCHECK(ret.IsNotFound() && left);
-    if((uint64_t)left->next & kNodeDeleted) {
+    if ((uint64_t)left->next & kNodeDeleted) {
       left = GetPrev(left);
     }
   }
@@ -308,11 +324,11 @@ retry:
 
   // We're sure that the predecessor's key is smaller than mine; now make sure
   // the to-be-successor has a key larger than mine.
-  if(!right->IsTail()) {
+  if (!right->IsTail()) {
     int cmp = right->key.compare(key);
-    if(cmp < 0) {
+    if (cmp < 0) {
       goto retry;
-    } else if(cmp == 0) {
+    } else if (cmp == 0) {
       return Status::KeyAlreadyExists();
     }
   }
@@ -321,22 +337,25 @@ retry:
 #if defined(PMEM)
 #if defined(MwCASSafeAlloc)
   auto desc = descriptor_pool_->AllocateDescriptor();
-  uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&left->next, (uint64_t)right,
-    Descriptor::kRecycleNewOnFailure);
-  Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
-    sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
+  uint32_t idx =
+      desc.ReserveAndAddEntry((uint64_t*)&left->next, (uint64_t)right,
+                              Descriptor::kRecycleNewOnFailure);
+  Allocator::Get()->AllocateAligned(
+      (void**)desc.GetNewValuePtr(idx),
+      sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
   SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
-  new(node) SkipListNode(key, value.size());
+  new (node) SkipListNode(key, value.size());
 #else
-  void **addr = PMAllocHelper::Get()->GetTlsPtr();
-  Allocator::Get()->AllocateAligned(addr,
-    sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
-  SkipListNode *node = new (*addr) SkipListNode(key, value.size());
+  void** addr = PMAllocHelper::Get()->GetTlsPtr();
+  Allocator::Get()->AllocateAligned(
+      addr, sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
+  SkipListNode* node = new (*addr) SkipListNode(key, value.size());
 #endif
 #else
   SkipListNode* node = nullptr;
-  Allocator::Get()->AllocateAligned((void **)&node,
-    sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
+  Allocator::Get()->AllocateAligned(
+      (void**)&node, sizeof(SkipListNode) + key.size() + value.size(),
+      kCacheLineSize);
   new (node) SkipListNode(key, value.size());
 #endif
   node->level = 1;
@@ -349,11 +368,11 @@ retry:
   NVRAM::Flush(node->Size(), node);
 #endif
 #if defined(PMEM) && defined(MwCASSafeAlloc)
-  if(!desc.MwCAS()) {
+  if (!desc.MwCAS()) {
     goto retry;
   }
 #else
-  if(CompareExchange64Ptr(&left->next, node, right) != right) {
+  if (CompareExchange64Ptr(&left->next, node, right) != right) {
     Allocator::Get()->FreeAligned(node);
     goto retry;
   }
@@ -374,7 +393,7 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
 
   uint32_t h = height_rng.Generate();
   uint32_t height = 1;
-  while(h & 1) {
+  while (h & 1) {
     height++;
     h >>= 1;
   }
@@ -382,48 +401,52 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
   bool grow = height > original_height;
 
   DCHECK(node->level == 1);
-  while(stack->Size() > 0) {
+  while (stack->Size() > 0) {
     auto* prev = stack->Pop();
-    if(prev->level > height) {
+    if (prev->level > height) {
       return;
     }
     DCHECK(prev->key.compare(node->key) < 0);
   retry:
     auto* next = GetNext(prev);
-    if(!next->IsTail()) {
+    if (!next->IsTail()) {
       int cmp = next->key.compare(node->key);
-      if(cmp == 0) {
+      if (cmp == 0) {
         return;
       } else if (cmp < 0) {
         prev = next;
         goto retry;
       }
     }
-    //DCHECK(next->level == prev->level || next->IsTail());
+    // DCHECK(next->level == prev->level || next->IsTail());
 
 #if defined(PMEM)
 #if defined(MwCASSafeAlloc)
     auto desc = descriptor_pool_->AllocateDescriptor();
-    uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&prev->next, (uint64_t)next,
-      Descriptor::kRecycleNewOnFailure);
-    Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
-      sizeof(SkipListNode) + node->key.size(), kCacheLineSize);
+    uint32_t idx =
+        desc.ReserveAndAddEntry((uint64_t*)&prev->next, (uint64_t)next,
+                                Descriptor::kRecycleNewOnFailure);
+    Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
+                                      sizeof(SkipListNode) + node->key.size(),
+                                      kCacheLineSize);
     SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
-    new(n) SkipListNode(node->key, 0);
+    new (n) SkipListNode(node->key, 0);
 #else
-    void **addr = PMAllocHelper::Get()->GetTlsPtr();
-    Allocator::Get()->AllocateAligned(addr,
-      sizeof(SkipListNode) + node->key.size(), kCacheLineSize);
-    SkipListNode *n = new (*addr) SkipListNode(node->key, 0);
+    void** addr = PMAllocHelper::Get()->GetTlsPtr();
+    Allocator::Get()->AllocateAligned(
+        addr, sizeof(SkipListNode) + node->key.size(), kCacheLineSize);
+    SkipListNode* n = new (*addr) SkipListNode(node->key, 0);
 #endif
 #else
     SkipListNode* n = nullptr;
-    Allocator::Get()->AllocateAligned((void **)&n,
-      sizeof(SkipListNode) + node->key.size(), kCacheLineSize);
+    Allocator::Get()->AllocateAligned(
+        (void**)&n, sizeof(SkipListNode) + node->key.size(), kCacheLineSize);
     new (n) SkipListNode(node->key, 0);
 #endif
 
-    if(CompareExchange64Ptr(&node->upper, (SkipListNode*)((uint64_t)n | kDirtyFlag), (SkipListNode*)0)) {
+    if (CompareExchange64Ptr(&node->upper,
+                             (SkipListNode*)((uint64_t)n | kDirtyFlag),
+                             (SkipListNode*)0)) {
       // Failed making the lower node to point to me, already deleted?
       // Add a dummy entry to just delete the memory allocated after Abort()
 #if defined(PMEM) && defined(MwCASSafeAlloc)
@@ -445,12 +468,12 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
     NVRAM::Flush(n->Size(), n);
 #endif
 #if defined(PMEM) && defined(MwCASSafeAlloc)
-    if(!desc.MwCAS()) {
+    if (!desc.MwCAS()) {
       *&n->level = SkipListNode::kLevelAbondoned;
       return;
     }
 #else
-    if(CompareExchange64Ptr(&prev->next, n, next) != next) {
+    if (CompareExchange64Ptr(&prev->next, n, next) != next) {
       *&n->level = SkipListNode::kLevelAbondoned;
       return;
     }
@@ -459,16 +482,18 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
     // Make it really available - visible to someone trying to delete
     *&n->level = node->level + 1;
     DCHECK(n->level == node->level + 1);
-    //DCHECK(n->level == next->level);  // XXX(tzwang): have to go as [level] might not be available for read immediately if [next] is being installed too
+    // DCHECK(n->level == next->level);  // XXX(tzwang): have to go as [level]
+    // might not be available for read immediately if [next] is being installed
+    // too
     node = n;
   }
   DCHECK(stack->Size() == 0);
 
   // Are we growing the list-wide height?
-  if(grow) {
+  if (grow) {
     // Multiple threads might be doing the same, but one will succeed
     auto* expected = READ(head_);
-    if(expected->level < height) {
+    if (expected->level < height) {
       auto* desired = (SkipListNode*)((uint64_t)expected->upper | kDirtyFlag);
       DCHECK(desired);
       if (CompareExchange64Ptr(&head_, desired, expected) == expected) {
@@ -496,9 +521,10 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
   SkipListNode* top = nullptr;
   SkipListNode* n = nullptr;
   n = node;
-  while(!top) {
-    while(*&n->level == SkipListNode::kInvalidLevel) { /** spin **/ }
-    if(*&n->level == SkipListNode::kLevelAbondoned) {
+  while (!top) {
+    while (*&n->level == SkipListNode::kInvalidLevel) { /** spin **/
+    }
+    if (*&n->level == SkipListNode::kLevelAbondoned) {
       // Definitely the top node
       top = n;
       break;
@@ -507,20 +533,22 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
     }
     auto* upper = READ(n->upper);
     DCHECK(n->key.compare(key) == 0);
-    if((uint64_t)upper == kNodeDeleted) {
+    if ((uint64_t)upper == kNodeDeleted) {
       top = n;
     } else {
-      if(upper == nullptr) {
+      if (upper == nullptr) {
         // See if there's an on-going insert and if so try to end it
-        if(nullptr == CompareExchange64Ptr(&n->upper,
-            (SkipListNode*)(kNodeDeleted | kDirtyFlag), (SkipListNode*)0)) {
+        if (nullptr ==
+            CompareExchange64Ptr(&n->upper,
+                                 (SkipListNode*)(kNodeDeleted | kDirtyFlag),
+                                 (SkipListNode*)0)) {
 #ifdef PMEM
           ReadPersist(&n->upper);
 #endif
           top = n;
         } else {
           upper = READ(n->upper);
-          if((uint64_t)upper & kNodeDeleted) {
+          if ((uint64_t)upper & kNodeDeleted) {
             // It was a concurrent deleter...
             top = n;
           } else {
@@ -532,14 +560,14 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
       }
     }
   }
-  if(!top) {
+  if (!top) {
     top = node;
   }
-  while(top) {
+  while (top) {
     DCHECK(top->key.compare(key) == 0);
     auto* to_delete = top;
     top = READ(top->lower);
-    if(to_delete->level != SkipListNode::kLevelAbondoned) {
+    if (to_delete->level != SkipListNode::kLevelAbondoned) {
       DeleteNode(to_delete);
     }
   }
@@ -554,7 +582,7 @@ bool CASDSkipList::DeleteNode(SkipListNode* node) {
     auto* node_next = READ(node->next);
     // No need to check node.upper - this function only cares about one
     // horizontal level
-    if((uint64_t)node_next & kNodeDeleted) {
+    if ((uint64_t)node_next & kNodeDeleted) {
       return false;
     }
     DCHECK(node->level == node_next->level);
@@ -574,10 +602,12 @@ bool CASDSkipList::DeleteNode(SkipListNode* node) {
   return false;
 }
 
-Status MwCASDSkipList::Insert(const Slice& key, const Slice& value, bool already_protected) {
+Status MwCASDSkipList::Insert(const Slice& key, const Slice& value,
+                              bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
-  // Get the supposedly left node at level 1; a larger value might have been inserted
-  // after it by the time I start to install a new key, so must make sure later
+  // Get the supposedly left node at level 1; a larger value might have been
+  // inserted after it by the time I start to install a new key, so must make
+  // sure later
 retry:
   SkipListNode* left = nullptr;
   SkipListNode* right = nullptr;
@@ -587,7 +617,7 @@ retry:
     return Status::KeyAlreadyExists();
   } else {
     DCHECK(ret.IsNotFound() && left);
-    if((uint64_t)left->next & kNodeDeleted) {
+    if ((uint64_t)left->next & kNodeDeleted) {
       left = GetPrev(left);
     }
   }
@@ -606,10 +636,10 @@ retry:
   // the to-be-successor has a key larger than mine.
   if (!right->IsTail()) {
     int cmp = right->key.compare(key);
-    if(cmp < 0) {
+    if (cmp < 0) {
       left = right;
       goto retry;
-    } else if(cmp == 0) {
+    } else if (cmp == 0) {
       return Status::KeyAlreadyExists();
     }
   }
@@ -619,13 +649,14 @@ retry:
   auto desc = descriptor_pool_->AllocateDescriptor();
   RAW_CHECK(desc.GetRaw(), "null MwCAS descriptor");
   uint32_t alloc_size = sizeof(SkipListNode) + key.size() + value.size();
-  uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&left->next, (uint64_t)right,
-    Descriptor::kRecycleNewOnFailure);
+  uint32_t idx =
+      desc.ReserveAndAddEntry((uint64_t*)&left->next, (uint64_t)right,
+                              Descriptor::kRecycleNewOnFailure);
 
-  Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
-    alloc_size, kCacheLineSize);
+  Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
+                                    alloc_size, kCacheLineSize);
   SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
-  new(node) SkipListNode(key, value.size());
+  new (node) SkipListNode(key, value.size());
   node->level = 1;
   memcpy(node->GetPayload(), value.data(), value.size());
   DCHECK(node->lower == nullptr);
@@ -638,7 +669,7 @@ retry:
 #endif
 
   desc.AddEntry((uint64_t*)&right->prev, (uint64_t)left, (uint64_t)node);
-  if(!desc.MwCAS()) {
+  if (!desc.MwCAS()) {
     goto retry;
   }
   FinishInsert(node);
@@ -654,7 +685,7 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
 
   uint32_t h = height_rng.Generate();
   uint32_t height = 1;
-  while(h & 1) {
+  while (h & 1) {
     height++;
     h >>= 1;
   }
@@ -662,19 +693,19 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
   bool grow = height > original_height;
 
   DCHECK(node->level == 1);
-  while(stack->Size() > 0) {
+  while (stack->Size() > 0) {
     auto* prev = stack->Pop();
-    if(prev->level > height) {
+    if (prev->level > height) {
       return;
     }
   retry:
-    if(prev->key.compare(node->key) == 0) {
+    if (prev->key.compare(node->key) == 0) {
       continue;
     }
     auto* next = GetNext(prev);
-    if(!next->IsTail()) {
+    if (!next->IsTail()) {
       int cmp = next->key.compare(node->key);
-      if(cmp == 0) {
+      if (cmp == 0) {
         return;
       } else if (cmp < 0) {
         prev = next;
@@ -684,11 +715,12 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
     auto desc = descriptor_pool_->AllocateDescriptor();
     RAW_CHECK(desc.GetRaw(), "null MwCAS descriptor");
     uint32_t alloc_size = sizeof(SkipListNode) + node->key.size();
-    uint32_t idx = desc.ReserveAndAddEntry((uint64_t*)&prev->next, (uint64_t)next,
-      Descriptor::kRecycleNewOnFailure);
+    uint32_t idx =
+        desc.ReserveAndAddEntry((uint64_t*)&prev->next, (uint64_t)next,
+                                Descriptor::kRecycleNewOnFailure);
 
-    Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx),
-      alloc_size, kCacheLineSize);
+    Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
+                                      alloc_size, kCacheLineSize);
     SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
     new (n) SkipListNode(node->key, 0);
     n->lower = node;
@@ -704,7 +736,7 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
 
     desc.AddEntry((uint64_t*)&node->upper, 0, (uint64_t)n);
     desc.AddEntry((uint64_t*)&next->prev, (uint64_t)prev, (uint64_t)n);
-    if(!desc.MwCAS()) {
+    if (!desc.MwCAS()) {
       return;
     }
     node = n;
@@ -712,10 +744,10 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
   DCHECK(stack->Size() == 0);
 
   // Are we growing the list-wide height?
-  if(grow) {
+  if (grow) {
     // Multiple threads might be doing the same, but one will succeed
     auto* expected = READ(head_);
-    if(expected->level < height) {
+    if (expected->level < height) {
       auto* desired = (SkipListNode*)((uint64_t)expected->upper | kDirtyFlag);
       DCHECK(desired);
       if (CompareExchange64Ptr(&head_, desired, expected) == expected) {
@@ -745,33 +777,34 @@ Status MwCASDSkipList::Delete(const Slice& key, bool already_protected) {
   SkipListNode* top = nullptr;
   SkipListNode* n = nullptr;
   n = node;
-  while(!top) {
+  while (!top) {
     DCHECK(n->key.compare(key) == 0);
     auto* upper = ResolveNodePointer(&n->upper);
-    if(!upper) {
+    if (!upper) {
       // If succeeded, this causes the concurrent insert's mwcas to fail
-      if(nullptr == CompareExchange64Ptr(&n->upper,
-          (SkipListNode*)(kNodeDeleted | kDirtyFlag), (SkipListNode*)0)) {
+      if (nullptr == CompareExchange64Ptr(
+                         &n->upper, (SkipListNode*)(kNodeDeleted | kDirtyFlag),
+                         (SkipListNode*)0)) {
 #ifdef PMEM
         ReadPersist(&n->upper);
 #endif
         top = n;
       } else {
         upper = ResolveNodePointer(&n->upper);
-        if((uint64_t)upper & kNodeDeleted) {
+        if ((uint64_t)upper & kNodeDeleted) {
           top = n;
         } else {
           n = upper;
         }
       }
-    } else if((uint64_t)upper == kNodeDeleted) {
+    } else if ((uint64_t)upper == kNodeDeleted) {
       top = n;
     } else {
       n = upper;
     }
   }
 
-  while(top) {
+  while (top) {
     DeleteNode(top);
     top = top->lower;
   }
@@ -789,9 +822,10 @@ bool MwCASDSkipList::DeleteNode(SkipListNode* node) {
     auto desc = descriptor_pool_->AllocateDescriptor();
     RAW_CHECK(desc.GetRaw(), "null MwCAS descriptor");
     desc.AddEntry((uint64_t*)&prev->next, (uint64_t)node, (uint64_t)next,
-                   Descriptor::kRecycleOldOnSuccess);
+                  Descriptor::kRecycleOldOnSuccess);
     desc.AddEntry((uint64_t*)&next->prev, (uint64_t)node, (uint64_t)prev);
-    desc.AddEntry((uint64_t*)&node->next, (uint64_t)next, (uint64_t)next | kNodeDeleted);
+    desc.AddEntry((uint64_t*)&node->next, (uint64_t)next,
+                  (uint64_t)next | kNodeDeleted);
     desc.MwCAS();
   }
   return true;
