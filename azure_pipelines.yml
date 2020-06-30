@@ -1,0 +1,62 @@
+trigger:
+- dev
+- ci
+
+pool: dis-03
+
+stages:
+- stage: Build
+  jobs:
+  - job: build_benchmark
+    steps:
+      - script: docker build -t pmwcas_bench_$(Build.BuildId) .
+        displayName: 'Build Docker image'
+
+- stage: Test
+  jobs:
+  - job: test
+    steps:
+      - script: docker run --name=pmwcas_bench_$(Build.BuildId)_$(backend)_test pmwcas_bench_$(Build.BuildId)
+        displayName: 'Run tests'
+
+      - script: docker cp pmwcas_bench_$(Build.BuildId)_$(backend)_test:/usr/src/pmwcas/build_tmp/Testing .
+        displayName: 'Copy the test results'
+      
+      - task: PublishTestResults@2
+        inputs:
+          testResultsFormat: 'CTest'
+          testResultsFiles: '**/Testing/*/Test.xml'
+  
+  - job: benchmark
+    dependsOn: test
+    steps:
+      - script: docker run --name=pmwcas_bench_$(Build.BuildId)_bench --entrypoint 
+               "/usr/src/pmwcas/build_tmp/src/benchmarks/mwcas_benchmark" pmwcas_bench_$(Build.BuildId)_pmdk 
+               --threads=4 --pmdk_pool=mwcas_pool
+        displayName: 'Run benchmarks'
+        env:
+          PMEM_IS_PMEM_FORCE: 1
+
+      - script: |
+          git clone --depth 1 -b gh-pages https://$GH_TOKEN@github.com:sfu-dis/pmwcas-benchmarks.git gh-pages
+          echo $(Build.SourceVersion) $(Build.BuildId) > ./public/build_data
+          docker cp pmwcas_bench_$(Build.BuildId)_bench:/usr/src/pmwcas/mwcas_bench_output.txt ./public/bench_data
+          cp ./gh-pages/data.json ./public/
+          cp ./public/* ./gh-pages
+          cd gh-pages 
+          python3 ./data_process.py
+          git config user.email "ci@haoxp.xyz"
+          git config user.name "cibot"
+          git add .
+          git commit -m"update benchmark result"
+          git push origin gh-pages --force
+        env:
+          GH_TOKEN: $(GITHUB_TOKEN)
+        displayName: "Publish benchmark result"
+  
+  - job: clean
+    dependsOn: benchmark
+    steps:
+      - script: docker rmi $(docker images --filter=reference="pmwcas_bench_$(Build.BuildId)*" -q) --force
+        displayName: 'Clean the containers'
+        condition: always()
