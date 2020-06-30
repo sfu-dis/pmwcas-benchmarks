@@ -12,3 +12,5 @@ target_link_libraries(skip-list glog::glog pmwcas)
 add_executable(skip_list_tests skip_list_test.cc)
 target_link_libraries(skip_list_tests skip-list gtest_main pmemobj)
 gtest_add_tests(TARGET skip_list_tests)
+
+add_subdirectory(pibench)

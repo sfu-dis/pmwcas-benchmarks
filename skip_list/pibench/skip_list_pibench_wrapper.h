@@ -3,9 +3,8 @@
 
 #include <sys/stat.h>
 
-#include "src/skip-list/skip_list.h"
+#include "../skip_list.h"
 #include "glog/logging.h"
-#include "include/pmwcas.h"
 #include "tree_api.hpp"
 
 static constexpr size_t kPayloadSize = sizeof(uint64_t);
