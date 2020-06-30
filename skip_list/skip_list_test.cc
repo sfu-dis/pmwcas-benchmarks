@@ -1,6 +1,7 @@
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <gflags/gflags.h>
 
 #include <vector>
 #include <memory>
@@ -25,6 +26,8 @@ struct PMDKRootObj {
 
 const uint32_t descriptor_pool_size = 100000;
 const uint32_t initial_max_height = 32;
+DEFINE_string(pmdk_pool, "/mnt/pmem0/skip_list_test_pool",
+              "path to pmdk pool");
 
 static void GenerateSliceFromInt(int64_t k, char *out) {
   int64_t swapped = _bswap64(k);
@@ -262,10 +265,12 @@ GTEST_TEST(DSkipListTest, MwCASConcurrentTest) {
 }
 
 int main(int argc, char** argv) {
+  FLAGS_logtostderr = 1;
   google::InitGoogleLogging(argv[0]);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   ::testing::InitGoogleTest(&argc, argv);
 #ifdef PMDK
-  pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create("/mnt/pmem0/geshi/skip_list_test_pool",
+  pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(FLAGS_pmdk_pool.c_str(),
                                                     "skip_list_layout",
                                                     static_cast<uint64_t >(1024) * 1024 * 1024 * 4),
                       pmwcas::PMDKAllocator::Destroy,
