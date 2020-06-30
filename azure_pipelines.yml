@@ -38,7 +38,7 @@ stages:
           PMEM_IS_PMEM_FORCE: 1
 
       - script: |
-          git clone --depth 1 -b gh-pages https://$GH_TOKEN@github.com:sfu-dis/pmwcas-benchmarks.git gh-pages
+          git clone --depth 1 -b gh-pages https://$GH_TOKEN@github.com/sfu-dis/pmwcas-benchmarks.git gh-pages
           echo $(Build.SourceVersion) $(Build.BuildId) > ./public/build_data
           docker cp pmwcas_bench_$(Build.BuildId)_bench:/usr/src/pmwcas/mwcas_bench_output.txt ./public/bench_data
           cp ./gh-pages/data.json ./public/
