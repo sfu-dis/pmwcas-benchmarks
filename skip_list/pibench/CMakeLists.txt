@@ -2,7 +2,7 @@
 ##################### PiBench #########################
 FetchContent_Declare(
         pibench 
-        GIT_REPOSITORY git@github.com:wangtzh/pibench.git
+        GIT_REPOSITORY https://github.com/wangtzh/pibench.git
         GIT_TAG master 
 )
 if (NOT pibench_POPULATED)
