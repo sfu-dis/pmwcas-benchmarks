@@ -1,5 +1,5 @@
 trigger:
-- dev
+- master 
 - ci
 
 pool: dis-03
