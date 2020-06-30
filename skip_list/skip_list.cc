@@ -18,27 +18,6 @@ ISkipList::ISkipList(int sync, uint32_t max_height) : sync_method_(sync), max_he
   // Preallocate a bunch of sentinel nodes; note however head_ points to the
   // sentinel node at the real current height, instead of max_height_.
 
-/*
-  FIXME(shiges): use PMwCAS to allocate sentinel nodes
-#ifdef PMEM
-  auto desc = descriptor_pool_->AllocateDescriptor();
-  uint32_t idx0 = desc.ReserveAndAddEntry(
-    (uint64_t*)pmwcas::Descriptor::kAllocNullAddress,
-    (uint64_t)nullptr,
-    pmwcas::Descriptor::kRecycleOnRecovery);
-  Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx0),
-    sizeof(SkipListNode) * max_height, kCacheLineSize);
-  char* head_memory = (char*)desc.GetNewValue(idx0);
-  memset(head_memory, 0, sizeof(SkipListNode) * max_height);
-  uint32_t idx1 = desc.ReserveAndAddEntry(
-    (uint64_t*)pmwcas::Descriptor::kAllocNullAddress,
-    (uint64_t)nullptr,
-    pmwcas::Descriptor::kRecycleOnRecovery);
-  Allocator::Get()->AllocateAligned((void **)desc.GetNewValuePtr(idx1),
-    sizeof(SkipListNode) * max_height, kCacheLineSize);
-  char* tail_memory = (char*)desc.GetNewValue(idx1);
-  memset(tail_memory, 0, sizeof(SkipListNode) * max_height);
-*/
   // FIXME(shiges): Ideally this should be wrapped in a PMDK tx, but
   // I don't really care how to do recovery if it crashes here...
   // Just make sure everything is on PM

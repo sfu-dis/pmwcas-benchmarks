@@ -1,8 +1,8 @@
 #pragma once
-#include "common/allocator_internal.h"
-#include "mwcas/mwcas.h"
-#include "util/atomics.h"
-#include "util/random_number_generator.h"
+// #include "common/allocator_internal.h"
+#include  <pmwcas.h>
+
+#include "../utils/random_number_generator.h"
 #include "pm_alloc_helper.h"
 
 // #define MwCASSafeAlloc 1
@@ -89,6 +89,7 @@ static_assert(offsetof(SkipListNode, key) == 64);
 class ISkipList {
  public:
 #ifndef PMDK
+#if 0
   inline static SkipListNode* NewNode(const Slice& key, uint32_t payload_size, bool copy_key = true) {
     SkipListNode *node = nullptr;
     uint64_t alloc_size = sizeof(SkipListNode) + (copy_key ? key.size() : 0) + payload_size;
@@ -96,6 +97,7 @@ class ISkipList {
     new (node) SkipListNode(key, payload_size, copy_key);
     return node;
   }
+#endif
 #endif
   inline static void FreeNode(void* context, void* node) {
     Allocator::Get()->FreeAligned(node);

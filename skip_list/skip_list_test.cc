@@ -1,25 +1,17 @@
-#define NOMINMAX
 
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+
+#include <vector>
 #include <memory>
 #include <atomic>
-#include <algorithm>
-#include <gtest/gtest.h>
-#include "util/performance_test.h"
-#include "util/key_data_helpers.h"
-#include "util/atomics.h"
-#include "include/pmwcas.h"
-#include "include/status.h"
-#include "include/allocator.h"
-#include "include/environment.h"
-#include "common/garbage_list.h"
-#include "common/allocator_internal.h"
-#include "util/random_number_generator.h"
+
 #include "skip_list.h"
-#ifdef WIN32
-#include "environment/environment_windows.h"
-#else
-#include "environment/environment_linux.h"
-#endif
+#include "pmwcas.h"
+#include "../utils/random_number_generator.h"
+#include "../utils/performance_test.h"
+
+using namespace pmwcas;
 
 #ifdef PMEM
 struct PMDKRootObj {
@@ -34,7 +26,11 @@ struct PMDKRootObj {
 const uint32_t descriptor_pool_size = 100000;
 const uint32_t initial_max_height = 32;
 
-namespace pmwcas {
+static void GenerateSliceFromInt(int64_t k, char *out) {
+  int64_t swapped = _bswap64(k);
+  memcpy(out, &swapped, sizeof(int64_t));
+};
+
 struct DSkipListTest : public PerformanceTest {
   const int64_t kTotalInserts = 50000;
   DSkipList* slist_;
@@ -54,10 +50,8 @@ struct DSkipListTest : public PerformanceTest {
 
   void Entry(size_t thread_index) {
     // *(slist_->GetEpoch()->epoch_table_->GetTlsValuePtr()) = nullptr;
-    unique_ptr_t<char> key_guard;
-    Slice key = AllocateSliceGuard(sizeof(int64_t), key_guard);
-    unique_ptr_t<char> data_guard;
-    Slice value = AllocateSliceGuard(sizeof(int64_t), data_guard);
+    auto key_guard = std::make_unique<char []>(sizeof(int64_t));
+    auto value_guard = std::make_unique<char []>(sizeof(int64_t));
 
     if(slist_->GetSyncMethod() == ISkipList::kSyncMwCAS) {
       MwCASMetrics::ThreadInitialize();
@@ -69,18 +63,21 @@ struct DSkipListTest : public PerformanceTest {
       if(k >= kTotalInserts) {
         break;
       }
-      GenerateSliceFromInt(k, sizeof(int64_t), true, &key);
-      GenerateSliceFromInt(k, sizeof(int64_t), true, &value);
+      GenerateSliceFromInt(k, key_guard.get());
+      Slice key(key_guard.get(), sizeof(int64_t));
+      GenerateSliceFromInt(k, value_guard.get());
+      Slice value(value_guard.get(), sizeof(int64_t));
       auto ret = slist_->Insert(key, value, false);
       ASSERT_TRUE(ret.ok());
     }
 
     barrier1_.CountAndWait();
-    GenerateSliceFromInt(0, sizeof(int64_t), true, &key);
+    // GenerateSliceFromInt(0, sizeof(int64_t), true, &key);
 
     uint64_t nnodes = 0;
     for(uint64_t k = 0; k < kTotalInserts; ++k) {
-      GenerateSliceFromInt(k, sizeof(int64_t), true, &key);
+      GenerateSliceFromInt(k, key_guard.get());
+      Slice key(key_guard.get(), sizeof(int64_t));
       auto s = slist_->Search(key, nullptr, false);
       if(s.ok()) {
         nnodes++;
@@ -92,7 +89,8 @@ struct DSkipListTest : public PerformanceTest {
 
     // See if we can find them
     for(int64_t search_key = 0; search_key < kTotalInserts; search_key++) {
-      GenerateSliceFromInt(search_key, sizeof(int64_t), true, &key);
+      GenerateSliceFromInt(search_key, key_guard.get());
+      Slice key(key_guard.get(), sizeof(int64_t));
       SkipListNode* value = nullptr;
       auto ret = slist_->Search(key, &value, false);
       EXPECT_TRUE(ret.ok());
@@ -102,7 +100,7 @@ struct DSkipListTest : public PerformanceTest {
     }
 
     // Forward scan
-    GenerateSliceFromInt(kTotalInserts - 1, sizeof(int64_t), true, &key);
+    // GenerateSliceFromInt(kTotalInserts - 1, sizeof(int64_t), true, &key);
     nnodes = 0;
     DSkipListCursor cursor(slist_, false, false);
     while(true) {
@@ -115,7 +113,7 @@ struct DSkipListTest : public PerformanceTest {
     EXPECT_EQ(nnodes, kTotalInserts);
 
     // Reverse scan
-    GenerateSliceFromInt(kTotalInserts - 1, sizeof(int64_t), true, &key);
+    // GenerateSliceFromInt(kTotalInserts - 1, sizeof(int64_t), true, &key);
     nnodes = 0;
     DSkipListCursor rcursor(slist_, false, true);
     while(true) {
@@ -136,7 +134,8 @@ struct DSkipListTest : public PerformanceTest {
       if(k < 0) {
         break;
       }
-      GenerateSliceFromInt(k, sizeof(int64_t), true, &key);
+      GenerateSliceFromInt(k, key_guard.get());
+      Slice key(key_guard.get(), sizeof(int64_t));
       auto ret = slist_->Delete(key, false);
       ASSERT_TRUE(ret.ok());
     }
@@ -261,17 +260,10 @@ GTEST_TEST(DSkipListTest, MwCASConcurrentTest) {
   // delete list;
   // delete pool;
 }
-}  // namespace pmwcas
 
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
   ::testing::InitGoogleTest(&argc, argv);
-#ifdef WIN32
-  pmwcas::InitLibrary(pmwcas::DefaultAllocator::Create,
-                           pmwcas::DefaultAllocator::Destroy,
-                           pmwcas::WindowsEnvironment::Create,
-                           pmwcas::WindowsEnvironment::Destroy);
-#else
 #ifdef PMDK
   pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create("/mnt/pmem0/geshi/skip_list_test_pool",
                                                     "skip_list_layout",
@@ -280,12 +272,11 @@ int main(int argc, char** argv) {
                       pmwcas::LinuxEnvironment::Create,
                       pmwcas::LinuxEnvironment::Destroy);
 #else
-  pmwcas::InitLibrary(pmwcas::DefaultAllocator::Create,
-                           pmwcas::DefaultAllocator::Destroy,
+  pmwcas::InitLibrary(pmwcas::TlsAllocator::Create,
+                           pmwcas::TlsAllocator::Destroy,
                            pmwcas::LinuxEnvironment::Create,
                            pmwcas::LinuxEnvironment::Destroy);
 #endif  // PMDK
-#endif  // WIN32
 
 #if defined(PMEM) && defined(UsePMAllocHelper)
   auto allocator =

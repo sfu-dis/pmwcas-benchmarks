@@ -7,10 +7,8 @@ set(UTIL_SOURCES
 )
 
 add_library(skip-list ${UTIL_SOURCES} ${UTIL_HEADERS})
-target_link_libraries(skip-list glog::glog)
+target_link_libraries(skip-list glog::glog pmwcas)
 
-if(${PMEM_BACKEND} STREQUAL "PMDK")
-add_subdirectory(pibench)
-endif()
-
-ADD_PMWCAS_TEST(skip_list_test)
+add_executable(skip_list_tests skip_list_test.cc)
+target_link_libraries(skip_list_tests skip-list gtest_main pmemobj)
+gtest_add_tests(TARGET skip_list_tests)

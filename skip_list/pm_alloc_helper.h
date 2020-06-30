@@ -3,8 +3,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "common/allocator_internal.h"
-#include "mwcas/mwcas.h"
+#include <pmwcas.h>
 
 namespace pmwcas {
 struct PMAllocTable {
