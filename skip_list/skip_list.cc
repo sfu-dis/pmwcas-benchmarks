@@ -380,7 +380,7 @@ retry:
   }
 #else
   if (CompareExchange64Ptr(&left->next, node, right) != right) {
-    Allocator::Get()->FreeAligned(node);
+    Allocator::Get()->FreeAligned((void **)&node);
     goto retry;
   }
 #endif
@@ -459,7 +459,7 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
 #if defined(PMEM) && defined(MwCASSafeAlloc)
       desc.Abort();
 #else
-      Allocator::Get()->FreeAligned(n);
+      Allocator::Get()->FreeAligned((void **)&n);
 #endif
       return;
     }

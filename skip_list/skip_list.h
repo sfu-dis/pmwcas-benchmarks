@@ -86,7 +86,7 @@ static_assert(offsetof(SkipListNode, key) == 64);
 class ISkipList {
  public:
   inline static void FreeNode(void* context, void* node) {
-    Allocator::Get()->FreeAligned(node);
+    Allocator::Get()->FreeAligned(&node);
   }
 
   ISkipList(int sync, uint32_t max_height);
