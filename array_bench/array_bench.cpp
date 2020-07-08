@@ -55,7 +55,7 @@ void DumpArgs() {
   std::cout << "> Args affinity " << FLAGS_affinity << std::endl;
   std::cout << "> Args desrciptor_pool_size " << FLAGS_descriptor_pool_size
             << std::endl;
-  std::cout << "> Args cacheline_padding" << FLAGS_cacheline_padding
+  std::cout << "> Args cacheline_padding " << FLAGS_cacheline_padding
             << std::endl;
 #ifdef PMDK
   std::cout << "> Args pmdk_pool " << FLAGS_pmdk_pool << std::endl;
