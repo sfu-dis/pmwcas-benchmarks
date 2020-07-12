@@ -109,10 +109,6 @@ struct MwCas : public Benchmark {
     new (descriptor_pool_)
         DescriptorPool(FLAGS_descriptor_pool_size, FLAGS_threads, true);
 
-    // Wrap the test array memory in an auto pointer for easy cleanup, keep the
-    // raw pointer to avoid indirection during access
-    test_array_guard_ = make_unique_ptr_t<CasPtr>(test_array_);
-
     // Now we can start from a clean slate (perhaps not necessary)
     for (uint32_t i = 0; i < FLAGS_array_size; ++i) {
       *array_by_index(i) = uint64_t(i * 4);
@@ -155,6 +151,16 @@ struct MwCas : public Benchmark {
     CHECK(0 == missing && 0 == duplicated)
         << "Failed final sanity test, missing: " << missing
         << " duplicated: " << duplicated;
+
+#ifdef PMDK
+    auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+    auto root_obj = reinterpret_cast<PMDKRootObj *>(
+        allocator->GetRoot(sizeof(PMDKRootObj)));
+    Allocator::Get()->Free((void **)&root_obj->test_array_);
+    test_array_ = nullptr;
+#else
+    Allocator::Get()->Free((void **)&test_array_);
+#endif
   }
 
   void Main(size_t thread_index) {
@@ -261,7 +267,6 @@ struct MwCas : public Benchmark {
   }
 
   CasPtr *test_array_;
-  unique_ptr_t<CasPtr> test_array_guard_;
   DescriptorPool *descriptor_pool_;
   uint64_t previous_dump_run_ticks_;
   MwCASMetrics cumulative_stats_;
