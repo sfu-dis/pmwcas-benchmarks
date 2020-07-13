@@ -5,9 +5,9 @@
 #include "../utils/random_number_generator.h"
 #include "pm_alloc_helper.h"
 
-// #define MwCASSafeAlloc 1
+#define MwCASSafeAlloc 1
 // #define EBRSafeAlloc 1
-#define UsePMAllocHelper 1
+//#define UsePMAllocHelper 1
 
 #ifdef EBRSafeAlloc
 static_assert(false, "Not implemented");
@@ -93,17 +93,6 @@ static_assert(offsetof(SkipListNode, key) == 64);
 
 class ISkipList {
  public:
-#ifndef PMDK
-#if 0
-  inline static SkipListNode* NewNode(const Slice& key, uint32_t payload_size, bool copy_key = true) {
-    SkipListNode *node = nullptr;
-    uint64_t alloc_size = sizeof(SkipListNode) + (copy_key ? key.size() : 0) + payload_size;
-    Allocator::Get()->AllocateAligned((void**)&node, alloc_size, kCacheLineSize);
-    new (node) SkipListNode(key, payload_size, copy_key);
-    return node;
-  }
-#endif
-#endif
   inline static void FreeNode(void* context, void* node) {
     Allocator::Get()->FreeAligned(node);
   }
