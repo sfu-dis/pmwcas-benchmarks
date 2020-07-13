@@ -3,11 +3,18 @@
 #include "glog/raw_logging.h"
 
 #ifdef PMEM
-#if defined(MwCASSafeAlloc) && defined(EBRSafeAlloc)
-static_assert(false, "Cannot have both reclamation mechanism");
-#elif not defined(MwCASSafeAlloc) && not defined(EBRSafeAlloc)
-#warning "Unsafe allocation: persistent memory leak is possible (PCAS only)!"
+#if defined(MwCASSafeAlloc) && defined(UsePMAllocHelper)
+#error "Cannot use both MwCASSafeAlloc and UsePMAllocHelper"
 #endif
+
+#if defined(MwCASSafeAlloc)
+#warning "Using single-word PMwCAS for CASDSkipList"
+#elif defined(UsePMAllocHelper)
+#warning "Using PCAS with unsafe allocation: persistent memory leak is possible (PCAS only)!"
+#else
+#error "MwCASSafeAlloc or UsePMAllocHelper needed for PMEM"
+#endif
+
 #endif
 
 namespace pmwcas {
