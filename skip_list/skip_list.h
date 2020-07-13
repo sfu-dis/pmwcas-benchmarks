@@ -5,9 +5,9 @@
 #include "../utils/random_number_generator.h"
 #include "pm_alloc_helper.h"
 
-// #define MwCASSafeAlloc 1
+#define MwCASSafeAlloc 1
 // #define EBRSafeAlloc 1
-#define UsePMAllocHelper 1
+//#define UsePMAllocHelper 1
 
 #ifdef EBRSafeAlloc
 static_assert(false, "Not implemented");

@@ -25,7 +25,7 @@ struct PMDKRootObj {
 };
 #endif
 
-const uint32_t descriptor_pool_size = 500000;
+const uint32_t descriptor_pool_size = 2000000;
 const uint32_t initial_max_height = 32;
 DEFINE_string(pmdk_pool, "skip_list_test_pool", "path to pmdk pool");
 
@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 #ifdef PMDK
   // Start with a new pool
-  system((std::string("rm -f") + FLAGS_pmdk_pool).c_str());
+  system((std::string("rm -f ") + FLAGS_pmdk_pool).c_str());
   pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
                           FLAGS_pmdk_pool.c_str(), "skip_list_layout",
                           static_cast<uint64_t>(1024) * 1024 * 1024 * 8),
