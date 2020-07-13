@@ -5,17 +5,9 @@
 #include "../utils/random_number_generator.h"
 #include "pm_alloc_helper.h"
 
-#define MwCASSafeAlloc 1
-// #define EBRSafeAlloc 1
-//#define UsePMAllocHelper 1
-
-#ifdef EBRSafeAlloc
-static_assert(false, "Not implemented");
-#endif
-
-#if defined(MwCASSafeAlloc) && defined(UsePMAllocHelper)
-static_assert(false, "Cannot have both");
-#endif
+/// PCAS variants (i.e., CASDSkipList with PMEM defined): 
+#define MwCASSafeAlloc 1  // Use single-word PMwCAS for safe allocation/deallocation (i.e., PCAS implemented as single-word PMwCAS)
+// #define UsePMAllocHelper 1  // Plain PCAS (dirty bit design only), only safe allocation guaranteed; pmem may leak upon failed PCAS.
 
 namespace pmwcas {
 
@@ -247,11 +239,6 @@ class CASDSkipList : public DSkipList {
       : DSkipList(kSyncPCAS, initial_max_height) {
     Status s = epoch_.Initialize();
     RAW_CHECK(s.ok(), "epoch init failure");
-#if defined(EBRSafeAlloc)
-    auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
-    bool ok = garbage_list_.Initialize(&epoch_, allocator->GetPool(), 1024 * 8);
-    RAW_CHECK(ok, "garbage list init failure");
-#endif
   }
   CASDSkipList(int sync_method, uint32_t max_height, SkipListNode* head,
                SkipListNode* tail)
@@ -329,11 +316,6 @@ class CASDSkipList : public DSkipList {
   DescriptorPool* descriptor_pool_;
 #else
   EpochManager epoch_;
-#if defined(PMEM) && defined(EBRSafeAlloc)
-  very_pm::GarbageList garbage_list_;
-
-  inline very_pm::GarbageList* GetGarbageList() { return &garbage_list_; }
-#else
   // Thread-local garbage_list to avoid contention under high core counts (eg
   // >18)
   inline GarbageListUnsafe* GetGarbageList() {
@@ -346,7 +328,6 @@ class CASDSkipList : public DSkipList {
     }
     return &garbage_list;
   }
-#endif
 #endif
 
   /// Helper function similar to (almost the same) as the one in CAS-based
