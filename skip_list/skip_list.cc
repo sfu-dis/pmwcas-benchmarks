@@ -469,11 +469,13 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
 #endif
 #if defined(PMEM) && defined(MwCASSafeAlloc)
     if (!desc.MwCAS()) {
+      node->upper = nullptr;
       *&n->level = SkipListNode::kLevelAbondoned;
       return;
     }
 #else
     if (CompareExchange64Ptr(&prev->next, n, next) != next) {
+      node->upper = nullptr;
       *&n->level = SkipListNode::kLevelAbondoned;
       return;
     }

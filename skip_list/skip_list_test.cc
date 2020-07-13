@@ -277,9 +277,11 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 #ifdef PMDK
+  // Start with a new pool
+  system((std::string("rm ") + FLAGS_pmdk_pool).c_str());
   pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
                           FLAGS_pmdk_pool.c_str(), "skip_list_layout",
-                          static_cast<uint64_t>(1024) * 1024 * 1024 * 4),
+                          static_cast<uint64_t>(1024) * 1024 * 1024 * 8),
                       pmwcas::PMDKAllocator::Destroy,
                       pmwcas::LinuxEnvironment::Create,
                       pmwcas::LinuxEnvironment::Destroy);
