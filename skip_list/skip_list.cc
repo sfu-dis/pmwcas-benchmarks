@@ -377,7 +377,7 @@ retry:
     goto retry;
   }
 #endif
-  CorrectPrev(left, right);
+  CorrectPrev(node, right);
 
   FinishInsert(node);
   return Status::OK();
