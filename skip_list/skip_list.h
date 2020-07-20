@@ -6,8 +6,8 @@
 #include "pm_alloc_helper.h"
 
 /// PCAS variants (i.e., CASDSkipList with PMEM defined): 
-#define MwCASSafeAlloc 1  // Use single-word PMwCAS for safe allocation/deallocation (i.e., PCAS implemented as single-word PMwCAS)
-// #define UsePMAllocHelper 1  // Plain PCAS (dirty bit design only), only safe allocation guaranteed; pmem may leak upon failed PCAS.
+// #define MwCASSafeAlloc 1  // Use single-word PMwCAS for safe allocation/deallocation (i.e., PCAS implemented as single-word PMwCAS)
+#define UsePMAllocHelper 1  // Plain PCAS (dirty bit design only), only safe allocation guaranteed; pmem may leak upon failed PCAS.
 
 namespace pmwcas {
 
