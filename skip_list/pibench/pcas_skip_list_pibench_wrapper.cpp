@@ -18,6 +18,10 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t &opt) {
   PMDKRootObj *root_obj_ =
       reinterpret_cast<PMDKRootObj *>(allocator->GetRoot(sizeof(PMDKRootObj)));
 
+#if defined(PMEM) && defined(UsePMAllocHelper)
+  pmwcas::PMAllocHelper::Get()->Initialize(&root_obj_->table_);
+#endif
+
   if (recovery) {
     std::cout << "recovery from existing pool." << std::endl;
 

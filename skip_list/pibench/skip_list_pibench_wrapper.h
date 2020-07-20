@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <sys/stat.h>
@@ -39,6 +38,9 @@ class skip_list_wrapper : public tree_api {
 struct PMDKRootObj {
   pmwcas::DescriptorPool *desc_pool_{nullptr};
   pmwcas::DSkipList *list_{nullptr};
+#ifdef UsePMAllocHelper
+  pmwcas::PMAllocTable *table_{nullptr};
+#endif
 };
 
 /*
