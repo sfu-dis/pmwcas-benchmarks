@@ -35,6 +35,8 @@ DEFINE_uint64(descriptor_pool_size, 262144, "number of total descriptors");
 DEFINE_int32(enable_stats, 1,
              "whether to enable stats on MwCAS internal"
              " operations");
+DEFINE_bool(cacheline_padding, false,
+            "whether to pad each array element to cacheline");
 #ifdef PMDK
 DEFINE_string(pmdk_pool, "/mnt/pmem0/mwcas_benchmark_pool",
               "path to pmdk pool");
@@ -53,6 +55,8 @@ void DumpArgs() {
   std::cout << "> Args affinity " << FLAGS_affinity << std::endl;
   std::cout << "> Args desrciptor_pool_size " << FLAGS_descriptor_pool_size
             << std::endl;
+  std::cout << "> Args cacheline_padding " << FLAGS_cacheline_padding
+            << std::endl;
 #ifdef PMDK
   std::cout << "> Args pmdk_pool " << FLAGS_pmdk_pool << std::endl;
 #endif
@@ -69,12 +73,18 @@ struct MwCas : public Benchmark {
   }
 
   inline CasPtr *array_by_index(uint32_t index) {
-    return (CasPtr *)((char *)test_array_ + index * kCacheLineSize);
+    if (FLAGS_cacheline_padding) {
+      return (CasPtr *)((char *)test_array_ + index * kCacheLineSize);
+    } else {
+      return test_array_ + index;
+    }
   }
 
   void Setup(size_t thread_count) {
     // Ideally the descriptor pool is sized to the number of threads in the
     // benchmark to reduce need for new allocations, etc.
+    size_t element_size =
+        FLAGS_cacheline_padding ? kCacheLineSize : sizeof(uint64_t);
 #ifdef PMDK
     auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
     auto root_obj = reinterpret_cast<PMDKRootObj *>(
@@ -83,7 +93,7 @@ struct MwCas : public Benchmark {
                                sizeof(DescriptorPool));
     // Allocate the thread array and initialize to consecutive even numbers
     Allocator::Get()->Allocate((void **)&root_obj->test_array_,
-                               FLAGS_array_size * kCacheLineSize);
+                               FLAGS_array_size * element_size);
     // TODO: might have some memory leak here, but for benchmark we don't care
     // (yet).
 
@@ -94,7 +104,7 @@ struct MwCas : public Benchmark {
                                sizeof(DescriptorPool));
     // Allocate the thread array and initialize to consecutive even numbers
     Allocator::Get()->Allocate((void **)&test_array_,
-                               FLAGS_array_size * kCacheLineSize);
+                               FLAGS_array_size * element_size);
 #endif
     new (descriptor_pool_)
         DescriptorPool(FLAGS_descriptor_pool_size, FLAGS_threads, true);
