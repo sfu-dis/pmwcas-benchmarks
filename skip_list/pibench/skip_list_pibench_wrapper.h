@@ -33,6 +33,23 @@ class skip_list_wrapper : public tree_api {
 
  protected:
   T *list;
+
+  const uint64_t kProtectCountThreshold = 100;
+
+  void ensure_protected() {
+    thread_local uint64_t protect_count{0};
+
+    if (protect_count == 0) {
+      list->GetEpoch()->Protect();
+    }
+
+    protect_count++;
+    if (protect_count == kProtectCountThreshold) {
+      list->GetEpoch()->Unprotect();
+      protect_count = 1;
+      list->GetEpoch()->Protect();
+    }
+  }
 };
 
 struct PMDKRootObj {
@@ -77,9 +94,10 @@ skip_list_wrapper<T>::~skip_list_wrapper() {
 template <typename T>
 bool skip_list_wrapper<T>::find(const char *key, size_t key_sz,
                                 char *value_out) {
+  ensure_protected();
   pmwcas::SkipListNode *vnode = nullptr;
   auto Key = pmwcas::Slice(key, key_sz);
-  bool ok = list->Search(Key, &vnode, false).ok();
+  bool ok = list->Search(Key, &vnode, true).ok();
   if (ok) {
     memcpy(value_out, vnode->GetPayload(), kPayloadSize);
     return true;
@@ -91,9 +109,10 @@ bool skip_list_wrapper<T>::find(const char *key, size_t key_sz,
 template <typename T>
 bool skip_list_wrapper<T>::insert(const char *key, size_t key_sz,
                                   const char *value, size_t value_sz) {
+  ensure_protected();
   auto Key = pmwcas::Slice(key, key_sz);
   auto Value = pmwcas::Slice(value, value_sz);
-  return list->Insert(Key, Value, false).ok();
+  return list->Insert(Key, Value, true).ok();
 }
 
 template <typename T>
@@ -105,8 +124,9 @@ bool skip_list_wrapper<T>::update(const char *key, size_t key_sz,
 
 template <typename T>
 bool skip_list_wrapper<T>::remove(const char *key, size_t key_sz) {
+  ensure_protected();
   auto Key = pmwcas::Slice(key, key_sz);
-  return list->Delete(Key, false).ok();
+  return list->Delete(Key, true).ok();
 }
 
 template <typename T>
