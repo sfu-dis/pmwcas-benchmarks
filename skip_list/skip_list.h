@@ -86,7 +86,13 @@ static_assert(offsetof(SkipListNode, key) == 64);
 class ISkipList {
  public:
   inline static void FreeNode(void* context, void* node) {
+#if defined(PMEM) && defined(UsePMAllocHelper)
+    void** addr = PMAllocHelper::Get()->GetTlsPtr();
+    *addr = node;
+    Allocator::Get()->FreeAligned(addr);
+#else
     Allocator::Get()->FreeAligned(&node);
+#endif
   }
 
   ISkipList(int sync, uint32_t max_height);

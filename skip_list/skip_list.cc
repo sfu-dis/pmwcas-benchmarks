@@ -349,7 +349,7 @@ retry:
                               Descriptor::kRecycleNewOnFailure);
   Allocator::Get()->AllocateAligned(
       (void**)desc.GetNewValuePtr(idx),
-      sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize);
+      sizeof(SkipListNode) + key.size() + value.size(), kCacheLineSize, true);
   SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
   new (node) SkipListNode(key, value.size());
 #else
@@ -374,13 +374,20 @@ retry:
 #ifdef PMEM
   NVRAM::Flush(node->Size(), node);
 #endif
-#if defined(PMEM) && defined(MwCASSafeAlloc)
+#if defined(PMEM)
+#if defined(MwCASSafeAlloc)
   if (!desc.MwCAS()) {
     goto retry;
   }
 #else
   if (CompareExchange64Ptr(&left->next, node, right) != right) {
-    Allocator::Get()->FreeAligned((void **)&node);
+    Allocator::Get()->FreeAligned(addr);
+    goto retry;
+  }
+#endif
+#else
+  if (CompareExchange64Ptr(&left->next, node, right) != right) {
+    Allocator::Get()->FreeAligned((void**)&node);
     goto retry;
   }
 #endif
@@ -435,7 +442,7 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
                                 Descriptor::kRecycleNewOnFailure);
     Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
                                       sizeof(SkipListNode) + node->key.size(),
-                                      kCacheLineSize);
+                                      kCacheLineSize, true);
     SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
     new (n) SkipListNode(node->key, 0);
 #else
@@ -456,10 +463,14 @@ void CASDSkipList::FinishInsert(SkipListNode* node) {
                              (SkipListNode*)0)) {
       // Failed making the lower node to point to me, already deleted?
       // Add a dummy entry to just delete the memory allocated after Abort()
-#if defined(PMEM) && defined(MwCASSafeAlloc)
+#if defined(PMEM)
+#if defined(MwCASSafeAlloc)
       desc.Abort();
 #else
-      Allocator::Get()->FreeAligned((void **)&n);
+      Allocator::Get()->FreeAligned(addr);
+#endif
+#else
+      Allocator::Get()->FreeAligned((void**)&n);
 #endif
       return;
     }
@@ -663,7 +674,7 @@ retry:
                               Descriptor::kRecycleNewOnFailure);
 
   Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
-                                    alloc_size, kCacheLineSize);
+                                    alloc_size, kCacheLineSize, true);
   SkipListNode* node = (SkipListNode*)desc.GetNewValue(idx);
   new (node) SkipListNode(key, value.size());
   node->level = 1;
@@ -729,7 +740,7 @@ void MwCASDSkipList::FinishInsert(SkipListNode* node) {
                                 Descriptor::kRecycleNewOnFailure);
 
     Allocator::Get()->AllocateAligned((void**)desc.GetNewValuePtr(idx),
-                                      alloc_size, kCacheLineSize);
+                                      alloc_size, kCacheLineSize, true);
     SkipListNode* n = (SkipListNode*)desc.GetNewValue(idx);
     new (n) SkipListNode(node->key, 0);
     n->lower = node;
