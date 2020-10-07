@@ -77,7 +77,7 @@ skip_list_wrapper<T>::~skip_list_wrapper() {
 template <typename T>
 bool skip_list_wrapper<T>::find(const char *key, size_t key_sz,
                                 char *value_out) {
-  pmwcas::SkipListNode *vnode = nullptr;
+  pmwcas::ptr<pmwcas::SkipListNode> vnode = nullptr;
   auto Key = pmwcas::Slice(key, key_sz);
   bool ok = list->Search(Key, &vnode, false).ok();
   if (ok) {

@@ -94,7 +94,7 @@ struct DSkipListTest : public PerformanceTest {
     for (int64_t search_key = 0; search_key < kTotalInserts; search_key++) {
       GenerateSliceFromInt(search_key, key_guard.get());
       Slice key(key_guard.get(), sizeof(int64_t));
-      SkipListNode *value = nullptr;
+      ptr<SkipListNode> value = nullptr;
       auto ret = slist_->Search(key, &value, false);
       EXPECT_TRUE(ret.ok());
       EXPECT_NE(value, nullptr);
