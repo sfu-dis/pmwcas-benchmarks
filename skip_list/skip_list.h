@@ -3,7 +3,6 @@
 #include <pmwcas.h>
 
 #include "../utils/random_number_generator.h"
-#include "nv_ptr.h"
 #include "pm_alloc_helper.h"
 
 /// PCAS variants (i.e., CASDSkipList with PMEM defined):
