@@ -52,7 +52,7 @@ endif()
 FetchContent_Declare(
         pmwcas
         GIT_REPOSITORY https://github.com/sfu-dis/pmwcas.git
-        GIT_TAG dev
+        GIT_TAG reclamation-upon-recovery
 )
 FetchContent_GetProperties(pmwcas)
 if (NOT pmwcas_POPULATED)
