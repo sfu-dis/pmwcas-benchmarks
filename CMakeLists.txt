@@ -8,7 +8,6 @@ include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -march=native")
-
 # Google Test
 FetchContent_Declare(
         googletest
@@ -59,13 +58,13 @@ if (NOT pmwcas_POPULATED)
   FetchContent_Populate(pmwcas)
   add_subdirectory(${pmwcas_SOURCE_DIR})
   include_directories(${pmwcas_SOURCE_DIR} ${pmwcas_SOURCE_DIR}/include)
-  PMWCAS_DEFINE_ENV()
+#  PMWCAS_DEFINE_ENV()
 endif()
 
 enable_testing()
 
 include_directories(utils)
 
-add_subdirectory(array_bench)
-add_subdirectory(doubly_linked_list)
+#add_subdirectory(array_bench)
+#add_subdirectory(doubly_linked_list)
 add_subdirectory(skip_list)
