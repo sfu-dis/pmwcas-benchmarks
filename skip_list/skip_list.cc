@@ -184,13 +184,9 @@ retry:
       }
     }
 
-    // The first that successfully sets prev[i] gets to proceed
-    if (CompareExchange64(&left->prev[i], left, (SkipListNode *)nullptr)) {
-      // Failed, continue to the next level
-      continue;
-    }
-
+    node->prev[i] = left;
     node->next[i] = right;
+
     if (CompareExchange64(&left->next[i], node, right) != right) {
       // Failed, give up?
       // The filled prev[i] field shouldn't matter - node height remains the old value
