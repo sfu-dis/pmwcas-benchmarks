@@ -13,4 +13,4 @@ add_executable(skip_list_tests skip_list_test.cc)
 target_link_libraries(skip_list_tests skiplist gtest_main pmemobj gflags::gflags numa)
 gtest_add_tests(TARGET skip_list_tests)
 
-#add_subdirectory(pibench)
+add_subdirectory(pibench)
