@@ -14,6 +14,8 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
 }
 
 pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
+  std::cout << "Sanity checking...\n";
+  slist_->SanityCheck(false);
   delete slist_;
   // FIXME(shiges): Thread::ClearRegistry()?
 }
