@@ -27,7 +27,7 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t &opt) {
 
 #if defined(PMEM) && defined(MwCASSafeAlloc)
     auto pool = root_obj_->desc_pool_;
-    pool->Recovery(false);
+    pool->Recovery(0, false);
 #endif
 
     list = static_cast<pmwcas::CASDSkipList *>(root_obj_->list_);

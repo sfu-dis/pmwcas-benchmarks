@@ -22,7 +22,7 @@ pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t &opt) {
     std::cout << "recovery from existing pool." << std::endl;
 
     auto pool = root_obj_->desc_pool_;
-    pool->Recovery(false);
+    pool->Recovery(0, false);
 
     list = static_cast<pmwcas::MwCASDSkipList *>(root_obj_->list_);
 
