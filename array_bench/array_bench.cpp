@@ -63,8 +63,8 @@ void DumpArgs() {
 }
 
 struct PMDKRootObj {
-  DescriptorPool *desc_pool{nullptr};
-  CasPtr *test_array_{nullptr};
+  PMEMoid desc_pool;
+  PMEMoid test_array;
 };
 
 struct MwCas : public Benchmark {
@@ -89,16 +89,18 @@ struct MwCas : public Benchmark {
     auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
     auto root_obj = reinterpret_cast<PMDKRootObj *>(
         allocator->GetRoot(sizeof(PMDKRootObj)));
-    Allocator::Get()->Allocate((void **)&root_obj->desc_pool,
-                               sizeof(DescriptorPool));
+    pmemobj_zalloc(allocator->GetPool(), &root_obj->desc_pool,
+                   sizeof(DescriptorPool), TOID_TYPE_NUM(char));
     // Allocate the thread array and initialize to consecutive even numbers
-    Allocator::Get()->Allocate((void **)&root_obj->test_array_,
-                               FLAGS_array_size * element_size);
+    pmemobj_zalloc(allocator->GetPool(), &root_obj->test_array,
+                   FLAGS_array_size * element_size, TOID_TYPE_NUM(char));
     // TODO: might have some memory leak here, but for benchmark we don't care
     // (yet).
 
-    descriptor_pool_ = root_obj->desc_pool;
-    test_array_ = root_obj->test_array_;
+    descriptor_pool_ =
+        reinterpret_cast<DescriptorPool *>(pmemobj_direct(root_obj->desc_pool));
+    test_array_ =
+        reinterpret_cast<CasPtr *>(pmemobj_direct(root_obj->test_array));
 #else
     Allocator::Get()->Allocate((void **)&descriptor_pool_,
                                sizeof(DescriptorPool));
@@ -156,7 +158,7 @@ struct MwCas : public Benchmark {
     auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
     auto root_obj = reinterpret_cast<PMDKRootObj *>(
         allocator->GetRoot(sizeof(PMDKRootObj)));
-    Allocator::Get()->Free((void **)&root_obj->test_array_);
+    pmemobj_free(&root_obj->test_array);
     test_array_ = nullptr;
 #else
     Allocator::Get()->Free((void **)&test_array_);
