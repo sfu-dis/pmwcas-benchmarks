@@ -152,7 +152,9 @@ retry:
   }
 
   // Setup [right.prev] to point to [node]
-  CorrectPrev(node, right, 0);
+  // [left] here is given as a "suggestion" using which CorrectPrev can find the
+  // true predecessor of [right]
+  CorrectPrev(left, right, 0);
 
   // Finish building the remaining levels
   // See if we are growing the list; if so, increase it to enable the next/prev pointers
@@ -196,18 +198,19 @@ retry:
 
     // Succeeded, increment node height and setup the prev pointer
     ++node->height;
-    CorrectPrev(node, right, i);
+    CorrectPrev(left, right, i);
   }
 
   return Status::OK();
 }
 
 
-void CASDSkipList::CorrectPrev(SkipListNode *new_prev, SkipListNode *node, uint16_t level) {
+// @prev: suggested predecessor of [node] - may be the old predecessor before an
+//        insert was made in front of [node]
+SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level) {
   DCHECK(GetEpoch()->IsProtected());
   //DCHECK(((uint64_t)node & SkipListNode::kNodeDeleted) == 0);
   SkipListNode *last_link = nullptr;
-  SkipListNode *prev = new_prev;
 
   while (true) {
     auto *link1 = node->prev[level];
@@ -216,9 +219,9 @@ void CASDSkipList::CorrectPrev(SkipListNode *new_prev, SkipListNode *node, uint1
       break;
     }
 
-    auto prev_next = prev->next[level];
-    DCHECK(prev_next);
-    if ((uint64_t)prev_next & SkipListNode::kNodeDeleted) {
+    auto *prev2 = prev->next[level];
+    DCHECK(prev2);
+    if ((uint64_t)prev2 & SkipListNode::kNodeDeleted) {
       DCHECK(false);
       /*
       // The predecessor is deleted, mark the deleted bit on its prev field as well
@@ -246,20 +249,25 @@ void CASDSkipList::CorrectPrev(SkipListNode *new_prev, SkipListNode *node, uint1
       */
     }
 
-    DCHECK(((uint64_t)prev_next & SkipListNode::kNodeDeleted) == 0);
-    if (prev_next != node) {
-      prev = prev_next;
-    } else {
-      SkipListNode *p = (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
-      if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
-        if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
-          DCHECK(false);
-          continue;
-        }
-      } // Fine if it failed - someone else should have fixed the link
-      break;
+    DCHECK(((uint64_t)prev2 & SkipListNode::kNodeDeleted) == 0);
+    if (prev2 != node) {
+      // The (given) [prev] is not the true predecessor of [node], advance it to
+      // see its successor is the true pred of [node]
+      last_link = prev;
+      prev = prev2;
+      continue;
     }
+    // Now [prev] should be the true predecessor, try a CAS to finalize it
+    SkipListNode *p = (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
+    if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
+      if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
+        DCHECK(false);
+        continue;
+      }
+      break;
+    } // Fine if it failed - someone else should have fixed the link
   }
+  return prev;
 }
 
 void CASDSkipList::SanityCheck(bool print) {

@@ -87,8 +87,13 @@ class CASDSkipList {
     return (SkipListNode *)((uint64_t)node & ~SkipListNode::kNodeDeleted);
   }
 
-  /// Helper function to link node.prev to new_prev
-  void CorrectPrev(SkipListNode *new_prev, SkipListNode *node, uint16_t level);
+  /// Helper function to setup [node].prev properly
+  /// @prev: a "suggested" predecessor of [node] that would allow the algorithm
+  ///        to locate the true predecessor of [node]; might be an old
+  ///        predecessor that points to another node which points to [node]. 
+  ///
+  /// Returns the predecessor set for [node] on node.prev
+  SkipListNode *CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level);
 
 
   inline void MarkNodePointer(SkipListNode **node) {
