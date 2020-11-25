@@ -175,7 +175,8 @@ retry:
       Slice right_key(right->GetKey(), right->key_size);
       int cmp = right_key.compare(key);
       if (cmp == 0) {
-        // Someone else acted faster
+        // Someone else acted faster - continue to the next level (if any)
+        continue;
       } else if (cmp < 0) {
         left = right;
         goto build_tower;
