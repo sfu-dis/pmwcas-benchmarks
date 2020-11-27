@@ -21,19 +21,21 @@ static void GenerateSliceFromInt(int64_t k, char *out) {
 };
 
 struct CASDSkipListTest : public PerformanceTest {
-  const int64_t kTotalInserts = 50000;
+  const int64_t kTotalInserts = 15000;
   CASDSkipList *slist_;
   std::atomic<int64_t> total_inserts_;
   Barrier barrier1_;
   Barrier barrier2_;
   Barrier barrier3_;
+  uint64_t thread_count;
   CASDSkipListTest(CASDSkipList *list, uint64_t thread_count)
       : PerformanceTest{},
         slist_(list),
         total_inserts_(0),
         barrier1_{thread_count},
         barrier2_{thread_count},
-        barrier3_{thread_count} {}
+        barrier3_{thread_count},
+        thread_count(thread_count) {}
 
   void Entry(size_t thread_index) {
     // *(slist_->GetEpoch()->epoch_table_->GetTlsValuePtr()) = nullptr;
@@ -72,6 +74,16 @@ struct CASDSkipListTest : public PerformanceTest {
     EXPECT_EQ(nnodes, kTotalInserts);
 
     barrier2_.CountAndWait();
+
+    for (uint64_t k = 0; k < kTotalInserts; ++k) {
+      if (k % thread_count == thread_index) {
+        GenerateSliceFromInt(k, key_guard.get());
+        Slice key(key_guard.get(), sizeof(int64_t));
+        auto ret = slist_->Delete(key, false);
+        ASSERT_TRUE(ret.ok());
+      }
+    }
+    barrier3_.CountAndWait();
   }
 };
 
@@ -80,7 +92,7 @@ GTEST_TEST(CASDSkipListTest, SingleThread) {
   CASDSkipList *list = new CASDSkipList;
   CASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
-  list->SanityCheck();
+  list->SanityCheck(true);
   delete list;
 }
 
@@ -90,7 +102,7 @@ GTEST_TEST(CASDSkipListTest, Concurrent) {
   CASDSkipList *list = new CASDSkipList;
   CASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
-  list->SanityCheck();
+  list->SanityCheck(true);
   delete list;
 }
 

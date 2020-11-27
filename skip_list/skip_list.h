@@ -95,6 +95,9 @@ class CASDSkipList {
   /// Returns the predecessor set for [node] on node.prev
   SkipListNode *CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level);
 
+  inline bool NodeIsDeleted(SkipListNode *node) {
+    return ((uint64_t)node->next & SkipListNode::kNodeDeleted);
+  }
 
   inline void MarkNodePointer(SkipListNode **node) {
     uint64_t flags = SkipListNode::kNodeDeleted;

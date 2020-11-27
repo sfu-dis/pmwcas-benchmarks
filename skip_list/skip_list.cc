@@ -209,49 +209,48 @@ retry:
 //        insert was made in front of [node]
 SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level) {
   DCHECK(GetEpoch()->IsProtected());
-  //DCHECK(((uint64_t)node & SkipListNode::kNodeDeleted) == 0);
   SkipListNode *last_link = nullptr;
+  SkipListNode *node0 = node;
+  SkipListNode *prev0 = prev;
 
   while (true) {
     auto *link1 = node->prev[level];
     if ((uint64_t)link1 & SkipListNode::kNodeDeleted) {
-      // Node already deleted
+      // Deleted bit marked on [prev]field, node is already deleted
       break;
     }
 
     auto *prev2 = prev->next[level];
     DCHECK(prev2);
     if ((uint64_t)prev2 & SkipListNode::kNodeDeleted) {
-      DCHECK(false);
-      /*
-      // The predecessor is deleted, mark the deleted bit on its prev field as well
       if (last_link) {
-        MarkNodePointer(&prev->prev[level]);
-        DCHECK((uint64_t)prev_cleared->prev & SkipListNode::kNodeDeleted);
+        // [prev] has deleted mark in its [next] field, i.e., it's at least being
+        // deleted; so mark also the deleted bit in its [prev] field.
+        SkipListNode *expected = prev->prev[level];
+        while (!((uint64_t)expected & SkipListNode::kNodeDeleted)) {
+          SkipListNode *desired = (SkipListNode *)((uint64_t)expected | SkipListNode::kNodeDeleted);
+          expected = CompareExchange64(&prev->prev[level], desired, expected);
+        }
 
         // Try to fix prev.prev.next to point to [node] to unlink this node ([prev])
-        uint64_t desired = ((uint64_t)prev_next & ~SkipListNode::kNodeDeleted);
-        if (prev == CompareExchange64(&last_link->next,
-                                     (ptr<SkipListNode>)(desired | kDirtyFlag),
-                                      prev)) {
-          Status s = GetGarbageList()->Push(prev, DSkipList::FreeNode, nullptr);
-          RAW_CHECK(s.ok(), "failed recycling node");
+        uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
+        if (prev == CompareExchange64(&last_link->next[level], (SkipListNode *)desired, prev)) {
+          // Status s = GetGarbageList()->Push(prev, DSkipList::FreeNode, nullptr);
+          // RAW_CHECK(s.ok(), "failed recycling node");
         }
         prev = last_link;
         last_link = nullptr;
         continue;
       }
-      prev_next = (ptr<SkipListNode>)((uint64_t)READ(prev_cleared->prev) &
-                                      ~SkipListNode::kNodeDeleted);
-      prev = prev_next;
+      prev2 = (SkipListNode *)((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
+      prev = prev2;
       DCHECK(prev);
       continue;
-      */
     }
 
     DCHECK(((uint64_t)prev2 & SkipListNode::kNodeDeleted) == 0);
     if (prev2 != node) {
-      // The (given) [prev] is not the true predecessor of [node], advance it to
+      // The given or current [prev] is not the true predecessor of [node], advance it to
       // see its successor is the true pred of [node]
       last_link = prev;
       prev = prev2;
@@ -261,13 +260,61 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
     SkipListNode *p = (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
     if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
       if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
-        DCHECK(false);
         continue;
       }
       break;
     } // Fine if it failed - someone else should have fixed the link
   }
   return prev;
+}
+
+Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
+  EpochGuard guard(GetEpoch(), !already_protected);
+  SkipListNode *node = nullptr;
+  Status ret = Traverse(key, &node);
+  if (ret != Status::OK()) {
+    // Not found?
+    return Status::NotFound();
+  }
+
+  DCHECK(node);
+
+  // Start from the lowest level to delete nodes.
+  // To delete a node (in a level), mark the [next] pointer first, then mark the
+  // deleted bit in [prev] pointer (must follow this order).
+  // Only the thread that succeeded marking [next] would continue to mark [prev].
+  for (uint32_t level = 0; level < node->height; level++) {
+    while (true) {
+      SkipListNode *node_next = node->next[level];
+      if ((uint64_t)node_next & SkipListNode::kNodeDeleted) {
+        // Already marked as deleted on [next] pointer by someone else
+        break;  // continue to the next level
+      }
+
+      SkipListNode *p = (SkipListNode *)((uint64_t)node_next | SkipListNode::kNodeDeleted);
+      if (node_next == CompareExchange64(&node->next[level], p, node_next)) {
+        // Continue to mark the [prev] pointer
+        SkipListNode *prev = nullptr;
+        while (true) {
+          prev = node->prev[level];
+          if ((uint64_t)prev & SkipListNode::kNodeDeleted) {
+            break;
+          }
+
+          p = (SkipListNode *)((uint64_t)prev | SkipListNode::kNodeDeleted);
+          if (prev == CompareExchange64(&node->prev[level], p, prev)) {
+            // Succeeded
+            break;
+          }
+        }
+
+        // Correct links
+        prev = CorrectPrev(prev, node_next, level);
+        break;  // continue to the next level
+      }
+    }
+  }
+  return Status::OK();
 }
 
 void CASDSkipList::SanityCheck(bool print) {
