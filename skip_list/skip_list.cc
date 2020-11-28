@@ -45,13 +45,9 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
     }
 
     // Look right to see if we can move there
-    Slice right_key(curr_node->GetKey(), curr_node->key_size);
+    Slice right_key(right->GetKey(), right->key_size);
     int cmp = key.compare(right_key);
-    if (cmp == 0) {
-      prev_node = curr_node;
-      curr_node = right;
-      break;
-    } else if (cmp < 0) {
+    if (cmp > 0) {
       // Right key smaller than target key, move there
       prev_node = curr_node;
       curr_node = right;

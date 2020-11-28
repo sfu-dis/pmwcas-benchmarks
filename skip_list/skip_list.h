@@ -138,6 +138,7 @@ class CASDSkipList {
     inline void Reset() { count = 0; }
     inline void Push(SkipListNode *node) {
       RAW_CHECK(count + 1 < kMaxFrames, "too many frames");
+      RAW_CHECK(node, "pushing nullptr into path stack");
       frames[count] = node;
       count++;
     }
