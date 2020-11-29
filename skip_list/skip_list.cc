@@ -123,9 +123,8 @@ retry:
 
   // Now prepare a node and try to insert it between left and right
   if (!node) {
-    Allocator::Get()->AllocateAligned(
-        (void**)&node, sizeof(SkipListNode) + key.size() + value.size(),
-        kCacheLineSize);
+    AllocateNode(&node, key.size(), value.size());
+    RAW_CHECK(node, "cannot allocate node");
 
     thread_local RandomNumberGenerator height_rng{};
     // Determine the height
@@ -163,7 +162,10 @@ retry:
   for (uint16_t i = 1; i < node_height; ++i) {
     if (stack->count > 0) {
       left = stack->Pop();
-      DCHECK(left == &head_ || left->height > i);
+      // XXX(tzwang): the check below won't always succeed - towers are first
+      // linked, and then have their height updated. It should be safe to ignore
+      // this.
+      // DCHECK(left == &head_ || left->height > i);
     } else {
       left = &head_;
     }
@@ -200,7 +202,6 @@ retry:
   return Status::OK();
 }
 
-
 // @prev: suggested predecessor of [node] - may be the old predecessor before an
 //        insert was made in front of [node]
 SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level) {
@@ -229,16 +230,22 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
         }
 
         // Try to fix prev.prev.next to point to [node] to unlink this node ([prev])
-        uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
-        if (prev == CompareExchange64(&last_link->next[level], (SkipListNode *)desired, prev)) {
-          // Status s = GetGarbageList()->Push(prev, DSkipList::FreeNode, nullptr);
-          // RAW_CHECK(s.ok(), "failed recycling node");
+        SkipListNode *desired = CleanPtr(prev2);
+        //uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
+        if (prev == CompareExchange64(&last_link->next[level], desired, prev)) {
+          // We need to unlink the node in all levels, so put the node only when
+          // we have unlinked all levels
+          if (Decrement64(&prev->height) == 0) {
+            Status s = GetGarbageList()->Push(prev, CASDSkipList::FreeNode, nullptr);
+            RAW_CHECK(s.ok(), "failed recycling node");
+          }
         }
         prev = last_link;
         last_link = nullptr;
         continue;
       }
-      prev2 = (SkipListNode *)((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
+      prev2 = CleanPtr(prev->prev[level]);
+      // (SkipListNode *)((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
       prev = prev2;
       DCHECK(prev);
       continue;
@@ -253,7 +260,7 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
       continue;
     }
     // Now [prev] should be the true predecessor, try a CAS to finalize it
-    SkipListNode *p = (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
+    SkipListNode *p = CleanPtr(prev); // (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
     if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
       if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
         continue;
@@ -279,7 +286,8 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
   // To delete a node (in a level), mark the [next] pointer first, then mark the
   // deleted bit in [prev] pointer (must follow this order).
   // Only the thread that succeeded marking [next] would continue to mark [prev].
-  for (uint32_t level = 0; level < node->height; level++) {
+  uint32_t node_height = node->height;
+  for (uint32_t level = 0; level < node_height; level++) {
     while (true) {
       SkipListNode *node_next = node->next[level];
       if ((uint64_t)node_next & SkipListNode::kNodeDeleted) {
@@ -305,7 +313,7 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
         }
 
         // Correct links
-        prev = CorrectPrev(prev, node_next, level);
+        prev = CorrectPrev(CleanPtr(prev), node_next, level);
         break;  // continue to the next level
       }
     }

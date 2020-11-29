@@ -58,11 +58,6 @@ struct SkipListNode {
 
   /// Returns the size of this node, including key and payload
   inline uint32_t Size() { return sizeof(*this) + payload_size + key_size; }
-
-  /// Deallocates a node
-  inline static void FreeNode(void* context, void* node) {
-    Allocator::Get()->FreeAligned(&node);
-  }
 };
 
 class CASDSkipList {
@@ -113,6 +108,19 @@ class CASDSkipList {
     }
   }
 
+  /// Allocate a node
+  inline void AllocateNode(SkipListNode **node, uint32_t key_size, uint32_t value_size) {
+    Allocator::Get()->AllocateAligned(
+      (void**)node, sizeof(SkipListNode) + key_size + value_size,
+      kCacheLineSize);
+  }
+
+  /// Deallocate a node
+  inline static void FreeNode(void* context, void* node) {
+    Allocator::Get()->FreeAligned(&node);
+  }
+
+
   /// Figure out the next node still valid after [node]
   /// XXX(tzwang): 20170119: Under PCAS, looking at next.next takes quite a lot
   /// of cycles (>15%, it uses mwcas read so need to check flags etc), making
@@ -151,6 +159,17 @@ class CASDSkipList {
   inline PathStack* GetTlsPathStack() {
     thread_local PathStack stack;
     return &stack;
+  }
+
+  inline GarbageListUnsafe* GetGarbageList() {
+    thread_local GarbageListUnsafe garbage_list;
+    thread_local bool initialized = false;
+    if (!initialized) {
+      auto s = garbage_list.Initialize(&epoch_);
+      RAW_CHECK(s.ok(), "garbage list init failure");
+      initialized = true;
+    }
+    return &garbage_list;
   }
 
  private:
