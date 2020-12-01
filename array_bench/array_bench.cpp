@@ -1,8 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <fcntl.h>
 #include <gflags/gflags.h>
 #include <pmwcas.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/wait.h>
 
 #include <fstream>
 #include <iostream>
@@ -40,6 +44,7 @@ DEFINE_bool(cacheline_padding, false,
 #ifdef PMDK
 DEFINE_string(pmdk_pool, "/mnt/pmem0/mwcas_benchmark_pool",
               "path to pmdk pool");
+DEFINE_string(semaphore_name, "/mwcas-recovery-bench-sem", "path to semaphore");
 #endif
 
 namespace pmwcas {
@@ -49,6 +54,7 @@ const size_t kMaxNumThreads = 64;
 
 /// Dumps args in a format that can be extracted by an experiment script
 void DumpArgs() {
+  std::cout << "> DESC_CAP " << DESC_CAP << std::endl;
   std::cout << "> Args threads " << FLAGS_threads << std::endl;
   std::cout << "> Args word_count " << FLAGS_word_count << std::endl;
   std::cout << "> Args array_size " << FLAGS_array_size << std::endl;
@@ -81,6 +87,25 @@ struct MwCas : public Benchmark {
   }
 
   void Setup(size_t thread_count) {
+#ifdef WIN32
+    pmwcas::InitLibrary(pmwcas::DefaultAllocator::Create,
+                        pmwcas::DefaultAllocator::Destroy,
+                        pmwcas::WindowsEnvironment::Create,
+                        pmwcas::WindowsEnvironment::Destroy);
+#else
+#ifdef PMDK
+    pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
+                            FLAGS_pmdk_pool.c_str(), "mwcas_layout",
+                            static_cast<uint64_t>(1024) * 1024 * 1204 * 1),
+                        pmwcas::PMDKAllocator::Destroy,
+                        pmwcas::LinuxEnvironment::Create,
+                        pmwcas::LinuxEnvironment::Destroy);
+#else
+    pmwcas::InitLibrary(
+        pmwcas::TlsAllocator::Create, pmwcas::TlsAllocator::Destroy,
+        pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
+#endif  // PMDK
+#endif
     // Ideally the descriptor pool is sized to the number of threads in the
     // benchmark to reduce need for new allocations, etc.
     size_t element_size =
@@ -275,6 +300,253 @@ struct MwCas : public Benchmark {
   std::atomic<uint64_t> total_success_;
 };
 
+#ifdef PMDK
+struct RecoveryBenchmark {
+  inline CasPtr *array_by_index(uint32_t index) {
+    if (FLAGS_cacheline_padding) {
+      return (CasPtr *)((char *)test_array_ + index * kCacheLineSize);
+    } else {
+      return test_array_ + index;
+    }
+  }
+
+  void ChildWorkload(sem_t *sem) {
+#ifdef WIN32
+    pmwcas::InitLibrary(pmwcas::DefaultAllocator::Create,
+                        pmwcas::DefaultAllocator::Destroy,
+                        pmwcas::WindowsEnvironment::Create,
+                        pmwcas::WindowsEnvironment::Destroy);
+#else
+#ifdef PMDK
+    pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
+                            FLAGS_pmdk_pool.c_str(), "mwcas_layout",
+                            static_cast<uint64_t>(1024) * 1024 * 1204 * 1),
+                        pmwcas::PMDKAllocator::Destroy,
+                        pmwcas::LinuxEnvironment::Create,
+                        pmwcas::LinuxEnvironment::Destroy);
+#else
+    pmwcas::InitLibrary(
+        pmwcas::TlsAllocator::Create, pmwcas::TlsAllocator::Destroy,
+        pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
+#endif  // PMDK
+#endif
+    size_t element_size =
+        FLAGS_cacheline_padding ? kCacheLineSize : sizeof(uint64_t);
+
+    auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+    auto root_obj = reinterpret_cast<PMDKRootObj *>(
+        allocator->GetRoot(sizeof(PMDKRootObj)));
+    pmemobj_zalloc(allocator->GetPool(), &root_obj->desc_pool,
+                   sizeof(DescriptorPool), TOID_TYPE_NUM(char));
+    // Allocate the thread array and initialize to consecutive even numbers
+    pmemobj_zalloc(allocator->GetPool(), &root_obj->test_array,
+                   FLAGS_array_size * element_size, TOID_TYPE_NUM(char));
+    // TODO: might have some memory leak here, but for benchmark we don't care
+    // (yet).
+
+    descriptor_pool_ =
+        reinterpret_cast<DescriptorPool *>(pmemobj_direct(root_obj->desc_pool));
+    test_array_ =
+        reinterpret_cast<CasPtr *>(pmemobj_direct(root_obj->test_array));
+
+    new (descriptor_pool_)
+        DescriptorPool(FLAGS_descriptor_pool_size, FLAGS_threads, true);
+
+    // Now we can start from a clean slate (perhaps not necessary)
+    for (uint32_t i = 0; i < FLAGS_array_size; ++i) {
+      *array_by_index(i) = uint64_t(i * 4);
+    }
+
+    NVRAM::Flush(FLAGS_array_size * element_size, test_array_);
+    NVRAM::Flush(sizeof(DescriptorPool), descriptor_pool_);
+    NVRAM::Flush(sizeof(PMDKRootObj), root_obj);
+    LOG(INFO) << "data flushed" << std::endl;
+
+    std::atomic<uint64_t> prepared{0};
+    std::atomic<bool> start{false};
+
+    std::vector<std::thread> workers;
+    for (uint32_t t = 0; t < FLAGS_threads; ++t) {
+      workers.emplace_back(
+          [&prepared, &start, this](DescriptorPool *desc_pool, CasPtr *array,
+                                    uint32_t thread_index) {
+            CasPtr *address[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            CasPtr value[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            RandomNumberGenerator rng(FLAGS_seed + thread_index, 0,
+                                      FLAGS_array_size);
+            auto s = MwCASMetrics::ThreadInitialize();
+            RAW_CHECK(s.ok(), "Error initializing thread");
+
+            const uint64_t kEpochThreshold = 100;
+            uint64_t epochs = 0;
+
+            prepared++;
+            while (!start)
+              ;
+
+            desc_pool->GetEpoch()->Protect();
+            while (true) {
+              if (++epochs == kEpochThreshold) {
+                descriptor_pool_->GetEpoch()->Unprotect();
+                descriptor_pool_->GetEpoch()->Protect();
+                epochs = 0;
+              }
+
+              // Pick a random word each time
+              for (uint32_t i = 0; i < FLAGS_word_count; ++i) {
+              retry:
+                uint64_t idx = rng.Generate(FLAGS_array_size);
+                for (uint32_t j = 0; j < i; ++j) {
+                  if (address[j] ==
+                      reinterpret_cast<CasPtr *>(array_by_index(idx))) {
+                    goto retry;
+                  }
+                }
+                address[i] = reinterpret_cast<CasPtr *>(array_by_index(idx));
+                value[i] = array_by_index(idx)->GetValueProtected();
+                CHECK(value[i] % (4 * FLAGS_array_size) >= 0 &&
+                      (value[i] % (4 * FLAGS_array_size)) / 4 <
+                          FLAGS_array_size);
+              }
+
+              auto descriptor = descriptor_pool_->AllocateDescriptor();
+              CHECK_NOTNULL(descriptor.GetRaw());
+              for (uint64_t i = 0; i < FLAGS_word_count; i++) {
+                descriptor.AddEntry((uint64_t *)(address[i]),
+                                    uint64_t(value[i]),
+                                    uint64_t(value[FLAGS_word_count - 1 - i] +
+                                             4 * FLAGS_array_size));
+              }
+              descriptor.MwCAS();
+            }
+          },
+          descriptor_pool_, test_array_, t);
+    }
+
+    while (prepared != FLAGS_threads)
+      ;
+    start = true;
+    sem_post(sem);
+
+    for (auto &w : workers) {
+      w.join();
+    }
+    LOG(FATAL) << "Child process finished, this should not happen" << std::endl;
+  }
+
+  void Setup() {
+    sem_t *sem = sem_open(FLAGS_semaphore_name.c_str(), O_CREAT, 0666, 0);
+    if (sem == SEM_FAILED) {
+      LOG(FATAL) << "Semaphore creation failure, errno: " << errno;
+    }
+    sem_unlink(FLAGS_semaphore_name.c_str());
+    pid_t pid = fork();
+    if (pid > 0) {
+      sem_wait(sem);
+      std::this_thread::sleep_for(std::chrono::seconds(FLAGS_seconds));
+
+      /// Step 3: force kill all running threads without noticing them
+      kill(pid, SIGKILL);
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    } else if (pid == 0) {
+      ChildWorkload(sem);
+      LOG(FATAL) << "Child process finished without being terminated";
+    }
+#ifdef WIN32
+    pmwcas::InitLibrary(pmwcas::DefaultAllocator::Create,
+                        pmwcas::DefaultAllocator::Destroy,
+                        pmwcas::WindowsEnvironment::Create,
+                        pmwcas::WindowsEnvironment::Destroy);
+#else
+#ifdef PMDK
+    pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
+                            FLAGS_pmdk_pool.c_str(), "mwcas_layout",
+                            static_cast<uint64_t>(1024) * 1024 * 1204 * 1),
+                        pmwcas::PMDKAllocator::Destroy,
+                        pmwcas::LinuxEnvironment::Create,
+                        pmwcas::LinuxEnvironment::Destroy);
+#else
+    pmwcas::InitLibrary(
+        pmwcas::TlsAllocator::Create, pmwcas::TlsAllocator::Destroy,
+        pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
+#endif  // PMDK
+#endif
+    LOG_IF(FATAL, !Allocator::Get()) << "Allocator initialization failed";
+    LOG_IF(FATAL, !Environment::Get()) << "Environment initialization failed";
+    LOG(INFO) << "Recovery starts here.";
+  }
+
+  void Main() {
+    auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+    auto root_obj = reinterpret_cast<PMDKRootObj *>(
+        allocator->GetRoot(sizeof(PMDKRootObj)));
+
+    descriptor_pool_ =
+        reinterpret_cast<DescriptorPool *>(pmemobj_direct(root_obj->desc_pool));
+    test_array_ =
+        reinterpret_cast<CasPtr *>(pmemobj_direct(root_obj->test_array));
+
+    descriptor_pool_->Recovery(0, false);
+  }
+
+  void Dump() {
+    std::cout << "Recovery took " << run_ms_ << " milliseconds.\n";
+  }
+
+  void Teardown() {
+    // Check the array for correctness
+    std::unique_ptr<int64_t> found(
+        (int64_t *)malloc(sizeof(int64_t) * FLAGS_array_size));
+
+    for (uint32_t i = 0; i < FLAGS_array_size; i++) {
+      found.get()[i] = 0;
+    }
+
+    for (uint32_t i = 0; i < FLAGS_array_size; i++) {
+      uint32_t idx =
+          uint32_t((uint64_t(*array_by_index(i)) % (4 * FLAGS_array_size)) / 4);
+
+      if (!(idx >= 0 && idx < FLAGS_array_size)) {
+        LOG(INFO) << "Invalid: pos=" << i
+                  << "val=" << uint64_t(*array_by_index(i));
+        continue;
+      }
+      found.get()[idx]++;
+    }
+
+    uint32_t missing = 0;
+    uint32_t duplicated = 0;
+    for (uint32_t i = 0; i < FLAGS_array_size; i++) {
+      if (found.get()[i] == 0) missing++;
+      if (found.get()[i] > 1) duplicated++;
+    }
+
+    CHECK(0 == missing && 0 == duplicated)
+        << "Failed final sanity test, missing: " << missing
+        << " duplicated: " << duplicated;
+  }
+
+  void Run() {
+    Setup();
+
+    uint64_t start = Environment::Get()->NowMicros();
+    Main();
+    uint64_t end = Environment::Get()->NowMicros();
+
+    run_ms_ = double(end - start) / double(1000);
+
+    Dump();
+
+    Teardown();
+  }
+
+  CasPtr *test_array_;
+  DescriptorPool *descriptor_pool_;
+  double run_ms_;
+};
+#endif
+
 }  // namespace pmwcas
 
 using namespace pmwcas;
@@ -300,6 +572,14 @@ Status RunMwCas() {
   return Status::OK();
 }
 
+Status RunRecovery() {
+  RecoveryBenchmark test{};
+  std::cout << "Starting benchmark..." << std::endl;
+  test.Run();
+
+  return Status::OK();
+}
+
 void RunBenchmark() {
   std::string benchmark_name{};
   std::stringstream benchmark_stream(FLAGS_benchmarks);
@@ -309,6 +589,8 @@ void RunBenchmark() {
     Status s{};
     if ("mwcas" == benchmark_name) {
       s = RunMwCas();
+    } else if ("recovery" == benchmark_name) {
+      s = RunRecovery();
     } else {
       fprintf(stderr, "unknown benchmark name: %s\n", benchmark_name.c_str());
     }
@@ -321,24 +603,6 @@ int main(int argc, char *argv[]) {
   FLAGS_logtostderr = 1;
   google::InitGoogleLogging(argv[0]);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-#ifdef WIN32
-  pmwcas::InitLibrary(
-      pmwcas::DefaultAllocator::Create, pmwcas::DefaultAllocator::Destroy,
-      pmwcas::WindowsEnvironment::Create, pmwcas::WindowsEnvironment::Destroy);
-#else
-#ifdef PMDK
-  pmwcas::InitLibrary(pmwcas::PMDKAllocator::Create(
-                          FLAGS_pmdk_pool.c_str(), "mwcas_layout",
-                          static_cast<uint64_t>(1024) * 1024 * 1204 * 1),
-                      pmwcas::PMDKAllocator::Destroy,
-                      pmwcas::LinuxEnvironment::Create,
-                      pmwcas::LinuxEnvironment::Destroy);
-#else
-  pmwcas::InitLibrary(
-      pmwcas::TlsAllocator::Create, pmwcas::TlsAllocator::Destroy,
-      pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
-#endif  // PMDK
-#endif
   RunBenchmark();
   return 0;
 }
