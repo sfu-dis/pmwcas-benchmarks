@@ -66,10 +66,42 @@ struct CASDSkipListTest : public PerformanceTest {
       //LOG(INFO) << "READ " << k;
       GenerateSliceFromInt(k, key_guard.get());
       Slice key(key_guard.get(), sizeof(int64_t));
-      auto s = slist_->Search(key, nullptr, false);
-      if (s.ok()) {
+      SkipListNode *node = nullptr;
+      {
+        EpochGuard guard(slist_->GetEpoch());
+        auto s = slist_->Search(key, &node, true);
+        EXPECT_TRUE(s.ok());
         nnodes++;
+        EXPECT_NE(node, nullptr);
+        EXPECT_EQ(memcmp(node->GetPayload(), key.data(), node->payload_size),
+                  0);
       }
+    }
+    EXPECT_EQ(nnodes, kTotalInserts);
+
+    // Forward scan
+    nnodes = 0;
+    CASDSkipListCursor cursor(slist_, true, true);
+    while (true) {
+      EpochGuard guard(slist_->GetEpoch());
+      SkipListNode *n = cursor.Next();
+      if (slist_->IsTail(n)) {
+        break;
+      }
+      nnodes++;
+    }
+    EXPECT_EQ(nnodes, kTotalInserts);
+
+    // Reverse scan
+    nnodes = 0;
+    CASDSkipListCursor rcursor(slist_, false, true);
+    while (true) {
+      EpochGuard guard(slist_->GetEpoch());
+      SkipListNode *n = rcursor.Prev();
+      if (slist_->IsHead(n)) {
+        break;
+      }
+      nnodes++;
     }
     EXPECT_EQ(nnodes, kTotalInserts);
 
@@ -84,6 +116,8 @@ struct CASDSkipListTest : public PerformanceTest {
       }
     }
     barrier3_.CountAndWait();
+
+    Thread::ClearRegistry(true);
   }
 };
 
@@ -92,8 +126,12 @@ GTEST_TEST(CASDSkipListTest, SingleThread) {
   CASDSkipList *list = new CASDSkipList;
   CASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
-  list->SanityCheck(true);
+  {
+    EpochGuard guard(list->GetEpoch());
+    list->SanityCheck(true);
+  }
   delete list;
+  Thread::ClearRegistry(true);
 }
 
 GTEST_TEST(CASDSkipListTest, Concurrent) {
@@ -102,8 +140,12 @@ GTEST_TEST(CASDSkipListTest, Concurrent) {
   CASDSkipList *list = new CASDSkipList;
   CASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
-  list->SanityCheck(true);
+  {
+    EpochGuard guard(list->GetEpoch());
+    list->SanityCheck(true);
+  }
   delete list;
+  Thread::ClearRegistry(true);
 }
 
 int main(int argc, char **argv) {

@@ -60,6 +60,9 @@ struct SkipListNode {
   inline uint32_t Size() { return sizeof(*this) + payload_size + key_size; }
 };
 
+template <typename DSkipList>
+struct DSkipListCursor;
+
 class CASDSkipList {
  public:
   CASDSkipList();
@@ -89,10 +92,6 @@ class CASDSkipList {
   ///
   /// Returns the predecessor set for [node] on node.prev
   SkipListNode *CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level);
-
-  inline bool NodeIsDeleted(SkipListNode *node) {
-    return ((uint64_t)node->next & SkipListNode::kNodeDeleted);
-  }
 
   inline void MarkNodePointer(SkipListNode **node) {
     uint64_t flags = SkipListNode::kNodeDeleted;
@@ -127,9 +126,13 @@ class CASDSkipList {
   /// it much slower than other variants. Just return the next node for now,
   /// the caller knows how to handle it anyway. In skip_list.cc the code that
   /// follows the original paper is commented out.
-  inline SkipListNode *GetNext(SkipListNode *node, uint32_t level_idx) {
-    return CleanPtr(node->next[level_idx]);
-  }
+  SkipListNode *GetNext(SkipListNode *node, uint32_t level);
+
+  SkipListNode *GetPrev(SkipListNode *node, uint32_t level);
+
+  inline bool IsHead(SkipListNode *node) const { return &head_ == node; }
+
+  inline bool IsTail(SkipListNode *node) const { return &tail_ == node; }
 
   static const uint64_t kDirtyFlag = 0;
 
@@ -173,10 +176,51 @@ class CASDSkipList {
   }
 
  private:
+  friend class DSkipListCursor<CASDSkipList>;
+
   SkipListNode head_;  // head node, search starts here
   SkipListNode tail_;  // tail node, search ends here
   EpochManager epoch_;
   uint64_t height;
 };
+
+template <typename DSkipList>
+struct DSkipListCursor {
+ public:
+  DSkipListCursor(DSkipList *list, const Slice &key, bool already_protected)
+      : list_(list),
+        curr_(nullptr),
+        guard_(list->GetEpoch(), !already_protected) {
+    auto s = list->Find(key, &curr_);
+    RAW_CHECK(curr_, "Cursor starts at invalid node");
+  }
+
+  DSkipListCursor(DSkipList *list, bool forward, bool already_protected)
+      : list_(list),
+        curr_(nullptr),
+        guard_(list->GetEpoch(), !already_protected) {
+    curr_ = forward ? &list->head_ : &list->tail_;
+    RAW_CHECK(curr_, "Cursor starts at invalid node");
+  }
+
+  SkipListNode *Next() {
+    DCHECK(list_);
+    curr_ = list_->GetNext(curr_, 0);
+    return curr_;
+  }
+
+  SkipListNode *Prev() {
+    DCHECK(list_);
+    curr_ = list_->GetPrev(curr_, 0);
+    return curr_;
+  }
+
+ private:
+  DSkipList *list_;
+  SkipListNode *curr_;
+  EpochGuard guard_;
+};
+
+using CASDSkipListCursor = DSkipListCursor<CASDSkipList>;
 
 }  // namespace pmwcas

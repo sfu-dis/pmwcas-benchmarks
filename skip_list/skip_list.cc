@@ -21,6 +21,54 @@ CASDSkipList::CASDSkipList() {
   DCHECK(tail_.payload_size == 0);
 }
 
+SkipListNode *CASDSkipList::GetNext(SkipListNode *node, uint32_t level) {
+  // return CleanPtr(node->next[level]);
+  DCHECK(GetEpoch()->IsProtected());
+
+  while (true) {
+    if (node == &tail_) {
+      return nullptr;
+    }
+    auto next = CleanPtr(node->next[level]);
+
+    if ((uint64_t)next->next[level] & SkipListNode::kNodeDeleted) {
+      // [next] is deleted. We deviate from the paper and simply skip
+      // this node without trying to unlink it from [node].
+      node = next;
+      continue;
+    }
+
+    return next;
+  }
+}
+
+SkipListNode *CASDSkipList::GetPrev(SkipListNode *node, uint32_t level) {
+  DCHECK(GetEpoch()->IsProtected());
+
+  while (true) {
+    if (node == &head_) {
+      return nullptr;
+    }
+    auto prev = CleanPtr(node->prev[level]);
+    auto prev_next = prev->next[level];
+    bool deleted = (uint64_t)node->next[level] & SkipListNode::kNodeDeleted;
+
+    if (prev_next == node && !deleted) {
+      // [node] is not deleted, and its prev ptr seems consistent.
+      // Note that [prev] could be the head sentinel.
+      return prev;
+    } else if (deleted) {
+      // [node] is deleted. Fix this cursor to the actual non-deleted node
+      // in the list before retrying GetPrev().
+      node = GetNext(node, level);
+    } else {
+      // [node] is not deleted, but its prev ptr is inconsistent.
+      // Try to correct it before retrying GetPrev().
+      CorrectPrev(prev, node, level);
+    }
+  }
+}
+
 Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
   DCHECK(GetEpoch()->IsProtected());
   auto *stack = GetTlsPathStack();
