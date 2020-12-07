@@ -15,9 +15,11 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
 
 pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
   std::cout << "Sanity checking...\n";
-  slist_->SanityCheck(false);
-  delete slist_;
-  // FIXME(shiges): Thread::ClearRegistry()?
+  {
+    pmwcas::EpochGuard guard(slist_->GetEpoch());
+    slist_->SanityCheck(false);
+  }
+  pmwcas::Thread::ClearRegistry(true);
 }
 
 bool pcas_skip_list_wrapper::find(const char* key, size_t key_sz,
@@ -52,12 +54,48 @@ bool pcas_skip_list_wrapper::update(const char* key, size_t key_sz,
 }
 
 bool pcas_skip_list_wrapper::remove(const char* key, size_t key_sz) {
-  // TODO(shiges): implementation
-  return false;
+  pmwcas::Slice k(key, key_sz);
+  return slist_->Delete(k, false).ok();
 }
 
 int pcas_skip_list_wrapper::scan(const char* key, size_t key_sz, int scan_sz,
                                  char*& values_out) {
-  // TODO(shiges): implementation
-  return false;
+  // XXX(shiges): We simply keep a 4KB buffer here. A key-value
+  // pair in our normal workload takes 16B and we only scan for
+  // 100 entries, so it should be large enough.
+  static const size_t kBufferSize = 4096;
+  thread_local char buffer[kBufferSize];
+
+  char *dst = buffer;
+  int scanned = 0;
+
+  pmwcas::Slice k(key, key_sz);
+  pmwcas::CASDSkipListCursor cursor(slist_, k, false);
+  DCHECK(slist_->GetEpoch()->IsProtected());
+
+  if (slist_->IsHead(cursor.Curr())) {
+    cursor.Next();
+  }
+
+  for (scanned = 0; scanned < scan_sz; ++scanned) {
+    pmwcas::SkipListNode *curr = cursor.Curr();
+    if (slist_->IsTail(curr)) {
+      break;
+    }
+
+    DCHECK(curr->GetKey());
+    memcpy(dst, curr->GetKey(), curr->key_size);
+    dst += curr->key_size;
+    DCHECK(dst - buffer <= kBufferSize);
+
+    DCHECK(curr->GetPayload());
+    memcpy(dst, curr->GetPayload(), curr->payload_size);
+    dst += curr->payload_size;
+    DCHECK(dst - buffer <= kBufferSize);
+
+    cursor.Next();
+  }
+
+  values_out = buffer;
+  return scanned;
 }

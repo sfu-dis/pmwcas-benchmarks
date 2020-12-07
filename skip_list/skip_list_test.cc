@@ -81,7 +81,9 @@ struct CASDSkipListTest : public PerformanceTest {
 
     // Forward scan
     nnodes = 0;
+    slist_->GetEpoch()->Protect();
     CASDSkipListCursor cursor(slist_, true, true);
+    slist_->GetEpoch()->Unprotect();
     while (true) {
       EpochGuard guard(slist_->GetEpoch());
       SkipListNode *n = cursor.Next();
@@ -94,7 +96,9 @@ struct CASDSkipListTest : public PerformanceTest {
 
     // Reverse scan
     nnodes = 0;
+    slist_->GetEpoch()->Protect();
     CASDSkipListCursor rcursor(slist_, false, true);
+    slist_->GetEpoch()->Unprotect();
     while (true) {
       EpochGuard guard(slist_->GetEpoch());
       SkipListNode *n = rcursor.Prev();

@@ -191,7 +191,8 @@ struct DSkipListCursor {
       : list_(list),
         curr_(nullptr),
         guard_(list->GetEpoch(), !already_protected) {
-    auto s = list->Find(key, &curr_);
+    DCHECK(list->GetEpoch()->IsProtected());
+    auto s = list->Search(key, &curr_, true);
     RAW_CHECK(curr_, "Cursor starts at invalid node");
   }
 
@@ -199,9 +200,12 @@ struct DSkipListCursor {
       : list_(list),
         curr_(nullptr),
         guard_(list->GetEpoch(), !already_protected) {
+    DCHECK(list->GetEpoch()->IsProtected());
     curr_ = forward ? &list->head_ : &list->tail_;
     RAW_CHECK(curr_, "Cursor starts at invalid node");
   }
+
+  SkipListNode *Curr() { return curr_; }
 
   SkipListNode *Next() {
     DCHECK(list_);
