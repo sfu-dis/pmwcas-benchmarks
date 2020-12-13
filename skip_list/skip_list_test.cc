@@ -15,6 +15,14 @@
 
 using namespace pmwcas;
 
+#ifdef PMDK
+DEFINE_string(pmdk_pool, "/mnt/pmem0/skip_list_test_pool", "path to pmdk pool");
+
+struct PMDKRootObj {
+  pmwcas::nv_ptr<pmwcas::CASDSkipList> list_{nullptr};
+};
+#endif
+
 static void GenerateSliceFromInt(int64_t k, char *out) {
   int64_t swapped = _bswap64(k);
   memcpy(out, &swapped, sizeof(int64_t));
@@ -66,7 +74,7 @@ struct CASDSkipListTest : public PerformanceTest {
       //LOG(INFO) << "READ " << k;
       GenerateSliceFromInt(k, key_guard.get());
       Slice key(key_guard.get(), sizeof(int64_t));
-      SkipListNode *node = nullptr;
+      nv_ptr<SkipListNode> node = nullptr;
       {
         EpochGuard guard(slist_->GetEpoch());
         auto s = slist_->Search(key, &node, true);
@@ -125,31 +133,43 @@ struct CASDSkipListTest : public PerformanceTest {
   }
 };
 
-GTEST_TEST(CASDSkipListTest, SingleThread) {
-  auto thread_count = 1;
+void RunCASDSkipListTest(uint64_t thread_count) {
+#ifdef PMEM
+  LOG(INFO) << "pool init to " << nv_ptr<int>(nullptr);
+  auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+  auto root_obj =
+      reinterpret_cast<PMDKRootObj *>(allocator->GetRoot(sizeof(PMDKRootObj)));
+  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->list_),
+                            sizeof(CASDSkipList), false);
+  CASDSkipList *list = root_obj->list_;
+  new (list) CASDSkipList;
+  pmwcas::PMAllocHelper::Get()->Initialize(&list->table_);
+#else
   CASDSkipList *list = new CASDSkipList;
+#endif
   CASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
   {
     EpochGuard guard(list->GetEpoch());
     list->SanityCheck(true);
   }
+#ifdef PMEM
+  allocator->FreeOffset(reinterpret_cast<uint64_t *>(&root_obj->list_));
+#else
   delete list;
+#endif
   Thread::ClearRegistry(true);
+}
+
+GTEST_TEST(CASDSkipListTest, SingleThread) {
+  uint32_t thread_count = 1;
+  RunCASDSkipListTest(thread_count);
 }
 
 GTEST_TEST(CASDSkipListTest, Concurrent) {
   uint32_t thread_count =
       std::max<uint32_t>(Environment::Get()->GetCoreCount() / 2, 1);
-  CASDSkipList *list = new CASDSkipList;
-  CASDSkipListTest test(list, thread_count);
-  test.Run(thread_count);
-  {
-    EpochGuard guard(list->GetEpoch());
-    list->SanityCheck(true);
-  }
-  delete list;
-  Thread::ClearRegistry(true);
+  RunCASDSkipListTest(thread_count);
 }
 
 int main(int argc, char **argv) {

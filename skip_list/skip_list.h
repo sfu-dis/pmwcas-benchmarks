@@ -2,6 +2,7 @@
 #include <pmwcas.h>
 
 #include "../utils/random_number_generator.h"
+#include "pm_alloc_helper.h"
 
 namespace pmwcas {
 
@@ -18,16 +19,16 @@ struct SkipListNode {
 
   // Note: next, prev, lower, and level should be put together, so a single
   // NVRAM::Flush() is enough to flush them all.
-  SkipListNode *next[SKIPLIST_MAX_HEIGHT];   // next node in the same level
-  SkipListNode *prev[SKIPLIST_MAX_HEIGHT];   // previous node in the same level
+  nv_ptr<SkipListNode> next[SKIPLIST_MAX_HEIGHT];   // next node in the same level
+  nv_ptr<SkipListNode> prev[SKIPLIST_MAX_HEIGHT];   // previous node in the same level
   volatile uint32_t height;  // levels grow upward from 1
   uint32_t key_size;
   uint32_t payload_size;
   char data[0];
 
   SkipListNode() : key_size(0), payload_size(0), height(kInvalidHeight) { 
-    memset(next, 0, sizeof(SkipListNode *) * SKIPLIST_MAX_HEIGHT);
-    memset(prev, 0, sizeof(SkipListNode *) * SKIPLIST_MAX_HEIGHT);
+    memset(next, 0, sizeof(nv_ptr<SkipListNode>) * SKIPLIST_MAX_HEIGHT);
+    memset(prev, 0, sizeof(nv_ptr<SkipListNode>) * SKIPLIST_MAX_HEIGHT);
   }
 
   SkipListNode(const Slice& key_to_copy, const Slice& value_to_copy, uint32_t initial_height) 
@@ -78,11 +79,11 @@ class CASDSkipList {
   Status Delete(const Slice& key, bool already_protected);
 
   /// Find the value of [key], result stored in [*value_node].
-  Status Search(const Slice& key, SkipListNode **value_node, bool already_protected);
+  Status Search(const Slice& key, nv_ptr<SkipListNode> *value_node, bool already_protected);
 
   /// Helper functions
-  static inline SkipListNode *CleanPtr(SkipListNode *node) {
-    return (SkipListNode *)((uint64_t)node & ~SkipListNode::kNodeDeleted);
+  static inline nv_ptr<SkipListNode> CleanPtr(nv_ptr<SkipListNode> node) {
+    return (nv_ptr<SkipListNode>)((uint64_t)node & ~SkipListNode::kNodeDeleted);
   }
 
   /// Helper function to setup [node].prev properly
@@ -91,16 +92,16 @@ class CASDSkipList {
   ///        predecessor that points to another node which points to [node]. 
   ///
   /// Returns the predecessor set for [node] on node.prev
-  SkipListNode *CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level);
+  nv_ptr<SkipListNode> CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr<SkipListNode> node, uint16_t level);
 
-  inline void MarkNodePointer(SkipListNode **node) {
+  inline void MarkNodePointer(nv_ptr<SkipListNode> *node) {
     uint64_t flags = SkipListNode::kNodeDeleted;
     while (true) {
-      SkipListNode *node_ptr = *node;
+      nv_ptr<SkipListNode> node_ptr = *node;
       if ((uint64_t)node_ptr & SkipListNode::kNodeDeleted) {
         return;
       }
-      auto desired = (SkipListNode *)((uint64_t)node_ptr | flags);
+      auto desired = (nv_ptr<SkipListNode>)((uint64_t)node_ptr | flags);
       if (node_ptr == CompareExchange64(node, desired, node_ptr)) {
         return;
       }
@@ -108,10 +109,18 @@ class CASDSkipList {
   }
 
   /// Allocate a node
-  inline void AllocateNode(SkipListNode **node, uint32_t key_size, uint32_t value_size) {
+  inline void AllocateNode(nv_ptr<SkipListNode> *node, uint32_t key_size, uint32_t value_size) {
+#ifdef PMEM
+  auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
+  uint64_t* tls_addr = (uint64_t*)PMAllocHelper::Get()->GetTlsPtr();
+  allocator->AllocateOffset(
+      tls_addr, sizeof(SkipListNode) + key_size + value_size, false);
+  *node = nv_ptr<SkipListNode>(*tls_addr);
+#else
     Allocator::Get()->AllocateAligned(
       (void**)node, sizeof(SkipListNode) + key_size + value_size,
       kCacheLineSize);
+#endif
   }
 
   /// Deallocate a node
@@ -126,34 +135,34 @@ class CASDSkipList {
   /// it much slower than other variants. Just return the next node for now,
   /// the caller knows how to handle it anyway. In skip_list.cc the code that
   /// follows the original paper is commented out.
-  SkipListNode *GetNext(SkipListNode *node, uint32_t level);
+  nv_ptr<SkipListNode> GetNext(nv_ptr<SkipListNode> node, uint32_t level);
 
-  SkipListNode *GetPrev(SkipListNode *node, uint32_t level);
+  nv_ptr<SkipListNode> GetPrev(nv_ptr<SkipListNode> node, uint32_t level);
 
-  inline bool IsHead(SkipListNode *node) const { return &head_ == node; }
+  inline bool IsHead(nv_ptr<SkipListNode> node) const { return &head_ == node; }
 
-  inline bool IsTail(SkipListNode *node) const { return &tail_ == node; }
+  inline bool IsTail(nv_ptr<SkipListNode> node) const { return &tail_ == node; }
 
   static const uint64_t kDirtyFlag = 0;
 
   /// [*value_node] points to the found node, or if not found, the predecessor node
-  Status Traverse(const Slice& key, SkipListNode **value_node);
+  Status Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node);
 
   struct PathStack {
     static const uint32_t kMaxFrames = 128;
-    SkipListNode *frames[kMaxFrames];
+    nv_ptr<SkipListNode> frames[kMaxFrames];
     uint32_t count;
 
     PathStack() : count(0) {}
-    SkipListNode *operator[](uint32_t index) { return frames[index]; }
+    nv_ptr<SkipListNode> operator[](uint32_t index) { return frames[index]; }
     inline void Reset() { count = 0; }
-    inline void Push(SkipListNode *node) {
+    inline void Push(nv_ptr<SkipListNode> node) {
       RAW_CHECK(count + 1 < kMaxFrames, "too many frames");
       RAW_CHECK(node, "pushing nullptr into path stack");
       frames[count] = node;
       count++;
     }
-    inline SkipListNode *Pop() { return frames[--count]; }
+    inline nv_ptr<SkipListNode> Pop() { return frames[--count]; }
     inline uint32_t Size() { return count; }
   };
 
@@ -182,6 +191,11 @@ class CASDSkipList {
   SkipListNode tail_;  // tail node, search ends here
   EpochManager epoch_;
   uint64_t height;
+
+#ifdef PMEM
+ public:
+  nv_ptr<PMAllocTable> table_{nullptr};
+#endif
 };
 
 template <typename DSkipList>
@@ -205,15 +219,15 @@ struct DSkipListCursor {
     RAW_CHECK(curr_, "Cursor starts at invalid node");
   }
 
-  SkipListNode *Curr() { return curr_; }
+  nv_ptr<SkipListNode> Curr() { return curr_; }
 
-  SkipListNode *Next() {
+  nv_ptr<SkipListNode> Next() {
     DCHECK(list_);
     curr_ = list_->GetNext(curr_, 0);
     return curr_;
   }
 
-  SkipListNode *Prev() {
+  nv_ptr<SkipListNode> Prev() {
     DCHECK(list_);
     curr_ = list_->GetPrev(curr_, 0);
     return curr_;
@@ -221,7 +235,7 @@ struct DSkipListCursor {
 
  private:
   DSkipList *list_;
-  SkipListNode *curr_;
+  nv_ptr<SkipListNode> curr_;
   EpochGuard guard_;
 };
 
