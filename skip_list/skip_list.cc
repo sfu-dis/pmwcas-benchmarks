@@ -21,7 +21,7 @@ CASDSkipList::CASDSkipList() {
   DCHECK(tail_.payload_size == 0);
 }
 
-SkipListNode *CASDSkipList::GetNext(SkipListNode *node, uint32_t level) {
+nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t level) {
   // return CleanPtr(node->next[level]);
   DCHECK(GetEpoch()->IsProtected());
 
@@ -38,7 +38,7 @@ SkipListNode *CASDSkipList::GetNext(SkipListNode *node, uint32_t level) {
       // delete [next] before progressing forward.
       DCHECK(next_ptr == next);
       MarkNodePointer(&next->prev[level]);
-      SkipListNode *desired = CleanPtr(next_next);
+      auto desired = CleanPtr(next_next);
       CompareExchange64(&node->next[level], desired, next_ptr);
       continue;
     }
@@ -52,7 +52,7 @@ SkipListNode *CASDSkipList::GetNext(SkipListNode *node, uint32_t level) {
   }
 }
 
-SkipListNode *CASDSkipList::GetPrev(SkipListNode *node, uint32_t level) {
+nv_ptr<SkipListNode> CASDSkipList::GetPrev(nv_ptr<SkipListNode> node, uint32_t level) {
   DCHECK(GetEpoch()->IsProtected());
 
   while (true) {
@@ -79,13 +79,13 @@ SkipListNode *CASDSkipList::GetPrev(SkipListNode *node, uint32_t level) {
   }
 }
 
-Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
+Status CASDSkipList::Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node) {
   DCHECK(GetEpoch()->IsProtected());
   auto *array = GetTlsPathArray();
   array->Reset();
 
-  SkipListNode *prev_node = nullptr;
-  SkipListNode *curr_node = &head_;
+  nv_ptr<SkipListNode> prev_node = nullptr;
+  nv_ptr<SkipListNode> curr_node = &head_;
   int32_t curr_level_idx = height - 1;
   DCHECK((((uint64_t)head_.next[curr_level_idx] & SkipListNode::kNodeDeleted)) == 0);
 
@@ -95,7 +95,7 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
   // Drill down to the lowest level
   while (curr_level_idx > 0) {
     // Descend until the right isn't tail
-    auto *right = GetNext(curr_node, curr_level_idx);
+    auto right = GetNext(curr_node, curr_level_idx);
     if (right == &tail_) {
       array->Set(curr_level_idx, curr_node, right);
       --curr_level_idx;
@@ -122,7 +122,7 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
   DCHECK(curr_node == &head_ ||
          memcmp(key.data(), curr_node->GetKey(), key.size()) > 0);
   while (true) {
-    auto *right = GetNext(curr_node, curr_level_idx);
+    auto right = GetNext(curr_node, curr_level_idx);
     if (right == &tail_) {
       // Traversal reaches tail - not found
       array->Set(curr_level_idx, curr_node, right);
@@ -160,7 +160,7 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
   DCHECK(false);
 }
 
-Status CASDSkipList::Search(const Slice& key, SkipListNode **value_node,
+Status CASDSkipList::Search(const Slice& key, nv_ptr<SkipListNode> *value_node,
                             bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
   return Traverse(key, value_node);
@@ -170,9 +170,9 @@ Status CASDSkipList::Insert(const Slice& key, const Slice& value, bool already_p
   EpochGuard guard(GetEpoch(), !already_protected);
   DCHECK(GetEpoch()->IsProtected());
 
-  SkipListNode *left = nullptr;
-  SkipListNode *right = nullptr;
-  SkipListNode *node = nullptr;
+  nv_ptr<SkipListNode> left = nullptr;
+  nv_ptr<SkipListNode> right = nullptr;
+  nv_ptr<SkipListNode> node = nullptr;
   uint64_t node_height = 1;
 
 retry:
@@ -216,8 +216,8 @@ retry:
   node->prev[0] = left;
 
   for (uint64_t i = 1; i < node_height; ++i) {
-    SkipListNode *left = nullptr;
-    SkipListNode *right = nullptr;
+    nv_ptr<SkipListNode> left = nullptr;
+    nv_ptr<SkipListNode> right = nullptr;
     if (i <= array->max_level) {
       array->Get(i, &left, &right);
     } else {
@@ -291,33 +291,33 @@ retry:
 
 // @prev: suggested predecessor of [node] - may be the old predecessor before an
 //        insert was made in front of [node]
-SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, uint16_t level) {
+nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr<SkipListNode> node, uint16_t level) {
   DCHECK(GetEpoch()->IsProtected());
-  SkipListNode *last_link = nullptr;
-  SkipListNode *node0 = node;
-  SkipListNode *prev0 = prev;
+  nv_ptr<SkipListNode> last_link = nullptr;
+  nv_ptr<SkipListNode> node0 = node;
+  nv_ptr<SkipListNode> prev0 = prev;
 
   while (true) {
-    auto *link1 = node->prev[level];
+    auto link1 = node->prev[level];
     if ((uint64_t)link1 & SkipListNode::kNodeDeleted) {
       // Deleted bit marked on [prev]field, node is already deleted
       break;
     }
 
-    auto *prev2 = prev->next[level];
+    auto prev2 = prev->next[level];
     DCHECK(prev2);
     if ((uint64_t)prev2 & SkipListNode::kNodeDeleted) {
       if (last_link) {
         // [prev] has deleted mark in its [next] field, i.e., it's at least being
         // deleted; so mark also the deleted bit in its [prev] field.
-        SkipListNode *expected = prev->prev[level];
+        nv_ptr<SkipListNode> expected = prev->prev[level];
         while (!((uint64_t)expected & SkipListNode::kNodeDeleted)) {
-          SkipListNode *desired = (SkipListNode *)((uint64_t)expected | SkipListNode::kNodeDeleted);
+          nv_ptr<SkipListNode> desired = (nv_ptr<SkipListNode> )((uint64_t)expected | SkipListNode::kNodeDeleted);
           expected = CompareExchange64(&prev->prev[level], desired, expected);
         }
 
         // Try to fix prev.prev.next to point to [node] to unlink this node ([prev])
-        SkipListNode *desired = CleanPtr(prev2);
+        nv_ptr<SkipListNode> desired = CleanPtr(prev2);
         //uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
         CompareExchange64(&last_link->next[level], desired, prev);
         prev = last_link;
@@ -325,7 +325,7 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
         continue;
       }
       prev2 = CleanPtr(prev->prev[level]);
-      // (SkipListNode *)((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
+      // (nv_ptr<SkipListNode> )((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
       prev = prev2;
       DCHECK(prev);
       continue;
@@ -341,7 +341,7 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
     }
     // Now [prev] should be the true predecessor, try a CAS to finalize it
     DCHECK(((uint64_t)prev & SkipListNode::kNodeDeleted) == 0);
-    SkipListNode *p = CleanPtr(prev); // (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
+    nv_ptr<SkipListNode> p = CleanPtr(prev); // (nv_ptr<SkipListNode> )((uint64_t)prev & ~SkipListNode::kNodeDeleted);
     if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
       if ((uint64_t)prev->prev[level] & SkipListNode::kNodeDeleted) {
         continue;
@@ -354,7 +354,7 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
 
 Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
-  SkipListNode *node = nullptr;
+  nv_ptr<SkipListNode> node = nullptr;
   Status ret = Traverse(key, &node);
   if (ret != Status::OK()) {
     // Not found?
@@ -372,13 +372,13 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
   for (uint32_t h = node_height; h > 0; h--) {
     uint32_t level = h - 1;
     while (true) {
-      SkipListNode *node_next = node->next[level];
+      nv_ptr<SkipListNode> node_next = node->next[level];
       if ((uint64_t)node_next & SkipListNode::kNodeDeleted) {
         // Already marked as deleted on [next] pointer by someone else
         break;  // continue to the next level
       }
 
-      SkipListNode *p = (SkipListNode *)((uint64_t)node_next | SkipListNode::kNodeDeleted);
+      nv_ptr<SkipListNode> p = (nv_ptr<SkipListNode> )((uint64_t)node_next | SkipListNode::kNodeDeleted);
       if (node_next == CompareExchange64(&node->next[level], p, node_next)) {
         if (level == 0) {
           // Among all the concurrent deleters, I'm the one that's going
@@ -386,14 +386,14 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
           deleted = true;
         }
         // Continue to mark the [prev] pointer
-        SkipListNode *prev = nullptr;
+        nv_ptr<SkipListNode> prev = nullptr;
         while (true) {
           prev = node->prev[level];
           if ((uint64_t)prev & SkipListNode::kNodeDeleted) {
             break;
           }
 
-          p = (SkipListNode *)((uint64_t)prev | SkipListNode::kNodeDeleted);
+          p = (nv_ptr<SkipListNode> )((uint64_t)prev | SkipListNode::kNodeDeleted);
           if (prev == CompareExchange64(&node->prev[level], p, prev)) {
             // Succeeded
             break;
@@ -420,7 +420,7 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
 
 void CASDSkipList::SanityCheck(bool print) {
   for (uint16_t i = 0; i < height; ++i) {//SKIPLIST_MAX_HEIGHT; ++i) {
-    SkipListNode *curr_node = &head_;
+    nv_ptr<SkipListNode> curr_node = &head_;
     while (curr_node != &tail_) {
       if (print) {
         if (curr_node == &head_) {
@@ -430,7 +430,7 @@ void CASDSkipList::SanityCheck(bool print) {
         }
       }
 
-      SkipListNode *right_node = GetNext(curr_node, i);
+      nv_ptr<SkipListNode> right_node = GetNext(curr_node, i);
       //RAW_CHECK(right_node->prev[i] == curr_node, "next/prev don't match");
 
       Slice curr_key(curr_node->GetKey(), curr_node->key_size);

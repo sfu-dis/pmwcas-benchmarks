@@ -24,7 +24,7 @@ pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
 
 bool pcas_skip_list_wrapper::find(const char* key, size_t key_sz,
                                   char* value_out) {
-  pmwcas::SkipListNode* vnode = nullptr;
+  pmwcas::nv_ptr<pmwcas::SkipListNode> vnode = nullptr;
   pmwcas::Slice k(key, key_sz);
 
   // FIXME(shiges): It looks like the memcpy followed by the
