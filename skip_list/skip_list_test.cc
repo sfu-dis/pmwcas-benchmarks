@@ -192,12 +192,5 @@ int main(int argc, char **argv) {
       pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
 #endif  // PMDK
 
-#if defined(PMEM) && defined(UsePMAllocHelper)
-  auto allocator =
-      reinterpret_cast<pmwcas::PMDKAllocator *>(pmwcas::Allocator::Get());
-  PMDKRootObj *root_obj_ =
-      reinterpret_cast<PMDKRootObj *>(allocator->GetRoot(sizeof(PMDKRootObj)));
-  pmwcas::PMAllocHelper::Get()->Initialize(&root_obj_->table_);
-#endif
   return RUN_ALL_TESTS();
 }

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 
+#ifdef PMEM
 namespace pmwcas {
 struct PMAllocTable {
   static constexpr uint64_t kMaxEntries = 256;
@@ -47,3 +48,4 @@ class PMAllocHelper {
   PMAllocTable *table{nullptr};
 };
 }  // namespace pmwcas
+#endif
