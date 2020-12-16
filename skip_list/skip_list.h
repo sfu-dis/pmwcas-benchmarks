@@ -8,6 +8,8 @@ namespace pmwcas {
 
 #define SKIPLIST_MAX_HEIGHT 32
 
+#define PERSISTENT_CAS_ADR 1
+
 #ifdef PMEM
 namespace persistent_ptr {
 static constexpr uint64_t kDirtyFlag = pmwcas::Descriptor::kDirtyFlag;
@@ -93,7 +95,7 @@ struct SkipListNode {
   inline uint32_t Size() { return sizeof(*this) + payload_size + key_size; }
 };
 
-#ifdef PMEM
+#if defined(PMEM) && PERSISTENT_CAS_ADR == 1
 inline nv_ptr<SkipListNode> ResolveNodePointer(nv_ptr<SkipListNode>* addr) {
   return persistent_ptr::read(reinterpret_cast<uint64_t*>(addr));
 }
@@ -197,8 +199,6 @@ class CASDSkipList {
   inline bool IsHead(nv_ptr<SkipListNode> node) const { return &head_ == node; }
 
   inline bool IsTail(nv_ptr<SkipListNode> node) const { return &tail_ == node; }
-
-  static const uint64_t kDirtyFlag = 0;
 
   /// [*value_node] points to the found node, or if not found, the predecessor node
   Status Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node);
