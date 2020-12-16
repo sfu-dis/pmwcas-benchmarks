@@ -29,9 +29,9 @@ nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t l
     if (node == &tail_) {
       return nullptr;
     }
-    auto next_ptr = node->next[level];
+    auto next_ptr = READ(node->next[level]);
     auto next = CleanPtr(next_ptr);
-    auto next_next = next->next[level];
+    auto next_next = READ(next->next[level]);
     bool d = (uint64_t)next_next & SkipListNode::kNodeDeleted;
     if (d && !((uint64_t)next_ptr & SkipListNode::kNodeDeleted)) {
       // [next] is deleted, but [node] is not. We need to logically
@@ -39,7 +39,7 @@ nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t l
       DCHECK(next_ptr == next);
       MarkNodePointer(&next->prev[level]);
       auto desired = CleanPtr(next_next);
-      CompareExchange64(&node->next[level], desired, next_ptr);
+      PersistentCAS(&node->next[level], desired, next_ptr);
       continue;
     }
     node = next;
@@ -59,9 +59,9 @@ nv_ptr<SkipListNode> CASDSkipList::GetPrev(nv_ptr<SkipListNode> node, uint32_t l
     if (node == &head_) {
       return nullptr;
     }
-    auto prev = CleanPtr(node->prev[level]);
-    auto prev_next = prev->next[level];
-    bool deleted = (uint64_t)node->next[level] & SkipListNode::kNodeDeleted;
+    auto prev = CleanPtr(READ(node->prev[level]));
+    auto prev_next = READ(prev->next[level]);
+    bool deleted = (uint64_t)READ(node->next[level]) & SkipListNode::kNodeDeleted;
 
     if (prev_next == node && !deleted) {
       // [node] is not deleted, and its prev ptr seems consistent.
@@ -230,7 +230,7 @@ retry:
   }
 
   // Link with pred in the lowest level
-  if (CompareExchange64(&left->next[0], node, right) != right) {
+  if (PersistentCAS(&left->next[0], node, right) != right) {
     // TODO(shiges): implement InsertBefore()
     goto retry;
   }
@@ -273,7 +273,7 @@ retry:
       break;
     }
 
-    if (CompareExchange64(&left->next[i], node, right) != right) {
+    if (PersistentCAS(&left->next[i], node, right) != right) {
       // Failed, give up?
       // The filled prev[i] field shouldn't matter - node height remains the old value
       break;
@@ -298,33 +298,33 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
   nv_ptr<SkipListNode> prev0 = prev;
 
   while (true) {
-    auto link1 = node->prev[level];
+    auto link1 = READ(node->prev[level]);
     if ((uint64_t)link1 & SkipListNode::kNodeDeleted) {
       // Deleted bit marked on [prev]field, node is already deleted
       break;
     }
 
-    auto prev2 = prev->next[level];
+    auto prev2 = READ(prev->next[level]);
     DCHECK(prev2);
     if ((uint64_t)prev2 & SkipListNode::kNodeDeleted) {
       if (last_link) {
         // [prev] has deleted mark in its [next] field, i.e., it's at least being
         // deleted; so mark also the deleted bit in its [prev] field.
-        nv_ptr<SkipListNode> expected = prev->prev[level];
+        nv_ptr<SkipListNode> expected = READ(prev->prev[level]);
         while (!((uint64_t)expected & SkipListNode::kNodeDeleted)) {
           nv_ptr<SkipListNode> desired = (nv_ptr<SkipListNode> )((uint64_t)expected | SkipListNode::kNodeDeleted);
-          expected = CompareExchange64(&prev->prev[level], desired, expected);
+          expected = PersistentCAS(&prev->prev[level], desired, expected);
         }
 
         // Try to fix prev.prev.next to point to [node] to unlink this node ([prev])
         nv_ptr<SkipListNode> desired = CleanPtr(prev2);
         //uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
-        CompareExchange64(&last_link->next[level], desired, prev);
+        PersistentCAS(&last_link->next[level], desired, prev);
         prev = last_link;
         last_link = nullptr;
         continue;
       }
-      prev2 = CleanPtr(prev->prev[level]);
+      prev2 = CleanPtr(READ(prev->prev[level]));
       // (nv_ptr<SkipListNode> )((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
       prev = prev2;
       DCHECK(prev);
@@ -342,7 +342,7 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
     // Now [prev] should be the true predecessor, try a CAS to finalize it
     DCHECK(((uint64_t)prev & SkipListNode::kNodeDeleted) == 0);
     nv_ptr<SkipListNode> p = CleanPtr(prev); // (nv_ptr<SkipListNode> )((uint64_t)prev & ~SkipListNode::kNodeDeleted);
-    if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
+    if (link1 == PersistentCAS(&node->prev[level], p, link1)) {
       if ((uint64_t)prev->prev[level] & SkipListNode::kNodeDeleted) {
         continue;
       }
@@ -372,14 +372,14 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
   for (uint32_t h = node_height; h > 0; h--) {
     uint32_t level = h - 1;
     while (true) {
-      nv_ptr<SkipListNode> node_next = node->next[level];
+      nv_ptr<SkipListNode> node_next = READ(node->next[level]);
       if ((uint64_t)node_next & SkipListNode::kNodeDeleted) {
         // Already marked as deleted on [next] pointer by someone else
         break;  // continue to the next level
       }
 
       nv_ptr<SkipListNode> p = (nv_ptr<SkipListNode> )((uint64_t)node_next | SkipListNode::kNodeDeleted);
-      if (node_next == CompareExchange64(&node->next[level], p, node_next)) {
+      if (node_next == PersistentCAS(&node->next[level], p, node_next)) {
         if (level == 0) {
           // Among all the concurrent deleters, I'm the one that's going
           // to report something positive to the user.
@@ -388,13 +388,13 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
         // Continue to mark the [prev] pointer
         nv_ptr<SkipListNode> prev = nullptr;
         while (true) {
-          prev = node->prev[level];
+          prev = READ(node->prev[level]);
           if ((uint64_t)prev & SkipListNode::kNodeDeleted) {
             break;
           }
 
           p = (nv_ptr<SkipListNode> )((uint64_t)prev | SkipListNode::kNodeDeleted);
-          if (prev == CompareExchange64(&node->prev[level], p, prev)) {
+          if (prev == PersistentCAS(&node->prev[level], p, prev)) {
             // Succeeded
             break;
           }

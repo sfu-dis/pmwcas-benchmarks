@@ -8,6 +8,38 @@ namespace pmwcas {
 
 #define SKIPLIST_MAX_HEIGHT 32
 
+#ifdef PMEM
+namespace persistent_ptr {
+static constexpr uint64_t kDirtyFlag = pmwcas::Descriptor::kDirtyFlag;
+
+inline uint64_t read(uint64_t* addr) {
+  uint64_t value = *addr;
+  if (value & kDirtyFlag) {
+    NVRAM::Flush(sizeof(uint64_t), addr);
+    CompareExchange64(addr, value & ~kDirtyFlag, value);
+  }
+  return value & ~kDirtyFlag;
+}
+
+inline uint64_t pcas(uint64_t* addr, uint64_t expected, uint64_t desired) {
+  uint64_t dirty_desired = desired | kDirtyFlag;
+retry:
+  auto value = CompareExchange64(addr, dirty_desired, expected);
+  if (value & kDirtyFlag) {
+    NVRAM::Flush(sizeof(uint64_t), addr);
+    CompareExchange64(addr, value & ~kDirtyFlag, value);
+    goto retry;
+  }
+
+  if (value == expected) {
+    NVRAM::Flush(sizeof(uint64_t), addr);
+    CompareExchange64(addr, desired, dirty_desired);
+  }
+  return value;
+}
+}  // namespace persistent_ptr
+#endif
+
 /// Describes a node in a skip list - common to all implementations.
 /// The first key byte is pointed to by key.data_.
 /// Payload follows the key
@@ -61,6 +93,27 @@ struct SkipListNode {
   inline uint32_t Size() { return sizeof(*this) + payload_size + key_size; }
 };
 
+#ifdef PMEM
+inline nv_ptr<SkipListNode> ResolveNodePointer(nv_ptr<SkipListNode>* addr) {
+  return persistent_ptr::read(reinterpret_cast<uint64_t*>(addr));
+}
+#define READ(x) ResolveNodePointer(&x)
+
+template <typename T>
+inline nv_ptr<T> PersistentCompareExchange64(nv_ptr<T>* addr, nv_ptr<T> desired,
+                                             nv_ptr<T> expected) {
+  return persistent_ptr::pcas(reinterpret_cast<uint64_t*>(addr),
+                              static_cast<uint64_t>(expected),
+                              static_cast<uint64_t>(desired));
+}
+#define PersistentCAS(addr, desired, expected) \
+  PersistentCompareExchange64<SkipListNode>(addr, desired, expected)
+#else
+#define READ(x) x
+#define PersistentCAS(addr, desired, expected) \
+  CompareExchange64(addr, desired, expected)
+#endif
+
 template <typename DSkipList>
 struct DSkipListCursor;
 
@@ -102,7 +155,7 @@ class CASDSkipList {
         return;
       }
       auto desired = (nv_ptr<SkipListNode>)((uint64_t)node_ptr | flags);
-      if (node_ptr == CompareExchange64(node, desired, node_ptr)) {
+      if (node_ptr == PersistentCAS(node, desired, node_ptr)) {
         return;
       }
     }
