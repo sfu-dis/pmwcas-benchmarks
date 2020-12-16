@@ -284,12 +284,8 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
           // We need to unlink the node in all levels, so put the node only when
           // we have unlinked all levels
           if (Decrement64(&prev->height) == 0) {
-#ifdef PMEM
-
-#else
             Status s = GetGarbageList()->Push(prev, CASDSkipList::FreeNode, nullptr);
             RAW_CHECK(s.ok(), "failed recycling node");
-#endif
           }
         }
         prev = last_link;
