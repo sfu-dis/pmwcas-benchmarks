@@ -180,7 +180,12 @@ class CASDSkipList {
 
   /// Deallocate a node
   inline static void FreeNode(void* context, void* node) {
-#if 0
+#ifdef PMEM
+    auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
+    uint64_t* tls_addr = (uint64_t*)PMAllocHelper::Get()->GetTlsPtr();
+    *tls_addr = (uint64_t)node;
+    allocator->FreeOffset(tls_addr);
+#else
     Allocator::Get()->FreeAligned(&node);
 #endif
   }
