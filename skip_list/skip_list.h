@@ -102,14 +102,15 @@ inline nv_ptr<SkipListNode> ResolveNodePointer(nv_ptr<SkipListNode>* addr) {
 #define READ(x) ResolveNodePointer(&x)
 
 template <typename T>
-inline nv_ptr<T> PersistentCompareExchange64(nv_ptr<T>* addr, nv_ptr<T> desired,
-                                             nv_ptr<T> expected) {
+inline T PersistentCompareExchange64(T* addr, T desired, T expected) {
+  static_assert(sizeof(T) == sizeof(uint64_t),
+                "PCAS only supports 8-byte target words");
   return persistent_ptr::pcas(reinterpret_cast<uint64_t*>(addr),
                               static_cast<uint64_t>(expected),
                               static_cast<uint64_t>(desired));
 }
 #define PersistentCAS(addr, desired, expected) \
-  PersistentCompareExchange64<SkipListNode>(addr, desired, expected)
+  PersistentCompareExchange64(addr, desired, expected)
 #else
 #define READ(x) x
 #define PersistentCAS(addr, desired, expected) \
@@ -152,7 +153,7 @@ class CASDSkipList {
   inline void MarkNodePointer(nv_ptr<SkipListNode> *node) {
     uint64_t flags = SkipListNode::kNodeDeleted;
     while (true) {
-      nv_ptr<SkipListNode> node_ptr = *node;
+      nv_ptr<SkipListNode> node_ptr = READ(*node);
       if ((uint64_t)node_ptr & SkipListNode::kNodeDeleted) {
         return;
       }
