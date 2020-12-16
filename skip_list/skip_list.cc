@@ -19,6 +19,10 @@ CASDSkipList::CASDSkipList() {
   DCHECK(head_.payload_size == 0);
   DCHECK(tail_.key_size == 0);
   DCHECK(tail_.payload_size == 0);
+
+#ifdef PMEM
+  NVRAM::Flush(sizeof(CASDSkipList), this);
+#endif
 }
 
 nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t level) {
@@ -182,12 +186,17 @@ retry:
       h >>= 1;
     }
     node_height = std::min<uint32_t>(node_height, SKIPLIST_MAX_HEIGHT);
+    new (node) SkipListNode(key, value, 1); //node_height);
+    NVRAM::Flush(sizeof(SkipListNode) + key.size() + value.size(), node);
   }
-  new (node) SkipListNode(key, value, 1); //node_height);
+  node->height = 1;
 
   // Build the lowest level first
   node->next[0] = right;
   node->prev[0] = left;
+#ifdef PMEM
+  NVRAM::Flush(sizeof(SkipListNode), node);
+#endif
 
   // Link with pred in the lowest level
   if (PersistentCAS(&left->next[0], node, right) != right) {
@@ -235,6 +244,10 @@ retry:
 
     node->prev[i] = left;
     node->next[i] = right;
+#ifdef PMEM
+    // FIXME(shiges): Adjust this
+    NVRAM::Flush(sizeof(SkipListNode), node);
+#endif
 
     if (PersistentCAS(&left->next[i], node, right) != right) {
       // Failed, give up?
@@ -273,7 +286,7 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
         // deleted; so mark also the deleted bit in its [prev] field.
         nv_ptr<SkipListNode> expected = READ(prev->prev[level]);
         while (!((uint64_t)expected & SkipListNode::kNodeDeleted)) {
-          nv_ptr<SkipListNode> desired = (nv_ptr<SkipListNode> )((uint64_t)expected | SkipListNode::kNodeDeleted);
+          nv_ptr<SkipListNode> desired = (nv_ptr<SkipListNode>)((uint64_t)expected | SkipListNode::kNodeDeleted);
           expected = PersistentCAS(&prev->prev[level], desired, expected);
         }
 
@@ -293,7 +306,7 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
         continue;
       }
       prev2 = CleanPtr(READ(prev->prev[level]));
-      // (nv_ptr<SkipListNode> )((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
+      // (nv_ptr<SkipListNode>)((uint64_t)prev->prev[level] & ~SkipListNode::kNodeDeleted);
       prev = prev2;
       DCHECK(prev);
       continue;
@@ -308,9 +321,9 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
       continue;
     }
     // Now [prev] should be the true predecessor, try a CAS to finalize it
-    nv_ptr<SkipListNode> p = CleanPtr(prev); // (nv_ptr<SkipListNode> )((uint64_t)prev & ~SkipListNode::kNodeDeleted);
+    nv_ptr<SkipListNode> p = CleanPtr(prev); // (nv_ptr<SkipListNode>)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
     if (link1 == PersistentCAS(&node->prev[level], p, link1)) {
-      if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
+      if ((uint64_t)READ(prev->prev[level]) & SkipListNode::kNodeDeleted) {
         continue;
       }
       break;
@@ -343,7 +356,7 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
         break;  // continue to the next level
       }
 
-      nv_ptr<SkipListNode> p = (nv_ptr<SkipListNode> )((uint64_t)node_next | SkipListNode::kNodeDeleted);
+      nv_ptr<SkipListNode> p = (nv_ptr<SkipListNode>)((uint64_t)node_next | SkipListNode::kNodeDeleted);
       if (node_next == PersistentCAS(&node->next[level], p, node_next)) {
         // Continue to mark the [prev] pointer
         nv_ptr<SkipListNode> prev = nullptr;
@@ -353,7 +366,7 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
             break;
           }
 
-          p = (nv_ptr<SkipListNode> )((uint64_t)prev | SkipListNode::kNodeDeleted);
+          p = (nv_ptr<SkipListNode>)((uint64_t)prev | SkipListNode::kNodeDeleted);
           if (prev == PersistentCAS(&node->prev[level], p, prev)) {
             // Succeeded
             break;
