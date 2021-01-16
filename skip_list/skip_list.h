@@ -139,29 +139,29 @@ class CASDSkipList {
   /// [*value_node] points to the found node, or if not found, the predecessor node
   Status Traverse(const Slice& key, SkipListNode **value_node);
 
-  struct PathStack {
-    static const uint32_t kMaxFrames = 128;
-    SkipListNode *frames[kMaxFrames];
-    uint32_t count;
+  struct PathArray {
+    SkipListNode *entries_[2 * SKIPLIST_MAX_HEIGHT];
+    uint64_t max_level;
 
-    PathStack() : count(0) {}
-    SkipListNode *operator[](uint32_t index) { return frames[index]; }
-    inline void Reset() { count = 0; }
-    inline void Push(SkipListNode *node) {
-      RAW_CHECK(count + 1 < kMaxFrames, "too many frames");
-      RAW_CHECK(node, "pushing nullptr into path stack");
-      frames[count] = node;
-      count++;
+    PathArray() : entries_{}, max_level(0) {}
+    inline void Reset() { max_level = 0; }
+    inline void Set(uint64_t level, SkipListNode *prev, SkipListNode *next) {
+      DCHECK(level < SKIPLIST_MAX_HEIGHT);
+      entries_[2 * level] = prev;
+      entries_[2 * level + 1] = next;
+      max_level = std::max(max_level, level);
     }
-    inline SkipListNode *Pop() { return frames[--count]; }
-    inline uint32_t Size() { return count; }
+    inline void Get(uint64_t level, SkipListNode **prev, SkipListNode **next) {
+      DCHECK(level < SKIPLIST_MAX_HEIGHT);
+      *prev = entries_[2 * level];
+      *next = entries_[2 * level + 1];
+      max_level = std::max(max_level, level);
+    }
   };
 
-  /// Thread-local list of all level 2 and higher nodes visited during a Find
-  /// operation
-  inline PathStack* GetTlsPathStack() {
-    thread_local PathStack stack;
-    return &stack;
+  inline PathArray* GetTlsPathArray() {
+    thread_local PathArray array;
+    return &array;
   }
 
   inline GarbageListUnsafe* GetGarbageList() {

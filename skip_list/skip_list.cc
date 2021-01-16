@@ -29,16 +29,26 @@ SkipListNode *CASDSkipList::GetNext(SkipListNode *node, uint32_t level) {
     if (node == &tail_) {
       return nullptr;
     }
-    auto next = CleanPtr(node->next[level]);
-
-    if ((uint64_t)next->next[level] & SkipListNode::kNodeDeleted) {
-      // [next] is deleted. We deviate from the paper and simply skip
-      // this node without trying to unlink it from [node].
-      node = next;
+    auto next_ptr = node->next[level];
+    auto next = CleanPtr(next_ptr);
+    auto next_next = next->next[level];
+    bool d = (uint64_t)next_next & SkipListNode::kNodeDeleted;
+    if (d && !((uint64_t)next_ptr & SkipListNode::kNodeDeleted)) {
+      // [next] is deleted, but [node] is not. We need to logically
+      // delete [next] before progressing forward.
+      DCHECK(next_ptr == next);
+      MarkNodePointer(&next->prev[level]);
+      SkipListNode *desired = CleanPtr(next_next);
+      CompareExchange64(&node->next[level], desired, next_ptr);
       continue;
     }
-
-    return next;
+    node = next;
+    if (!d) {
+      // [next] is not deleted - that's the desired successor.
+      return next;
+    }
+    // Ok, both nodes are deleted. We have to retry the same procedure
+    // with [next] recursively.
   }
 }
 
@@ -71,8 +81,8 @@ SkipListNode *CASDSkipList::GetPrev(SkipListNode *node, uint32_t level) {
 
 Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
   DCHECK(GetEpoch()->IsProtected());
-  auto *stack = GetTlsPathStack();
-  stack->Reset();
+  auto *array = GetTlsPathArray();
+  array->Reset();
 
   SkipListNode *prev_node = nullptr;
   SkipListNode *curr_node = &head_;
@@ -87,8 +97,8 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
     // Descend until the right isn't tail
     auto *right = GetNext(curr_node, curr_level_idx);
     if (right == &tail_) {
+      array->Set(curr_level_idx, curr_node, right);
       --curr_level_idx;
-      stack->Push(curr_node);
       continue;
     }
 
@@ -101,38 +111,53 @@ Status CASDSkipList::Traverse(const Slice& key, SkipListNode **value_node) {
       curr_node = right;
     } else {
       // Right is too big, go down
+      array->Set(curr_level_idx, curr_node, right);
       --curr_level_idx;
-      stack->Push(curr_node);
     }
   }
 
   // Now at the lowest level, do linear search starting from [curr_node]
   DCHECK(curr_level_idx == 0);
-  while (curr_node != &tail_) {
-    Slice curr_key(curr_node->GetKey(), curr_node->key_size);
-    int cmp = curr_key.compare(key);
-    if (cmp == 0) {
-      // Found the target key
+  DCHECK(curr_node != &tail_);
+  DCHECK(curr_node == &head_ ||
+         memcmp(key.data(), curr_node->GetKey(), key.size()) > 0);
+  while (true) {
+    auto *right = GetNext(curr_node, curr_level_idx);
+    if (right == &tail_) {
+      // Traversal reaches tail - not found
+      array->Set(curr_level_idx, curr_node, right);
       if (value_node) {
         *value_node = curr_node;
       }
+      return Status::NotFound();
+    }
+
+    // Look right to see if we can move there
+    Slice right_key(right->GetKey(), right->key_size);
+    int cmp = key.compare(right_key);
+    if (cmp == 0) {
+      // Found the target key
+      if (value_node) {
+        *value_node = right;
+      }
+      array->Set(curr_level_idx, curr_node, right);
       return Status::OK();
     } else if (cmp > 0) {
+      // Right key smaller than target key, move there
+      prev_node = curr_node;
+      curr_node = right;
+    } else {
       // Too big - not found;
       if (value_node) {
-        *value_node = prev_node;
+        *value_node = curr_node;
       }
+      array->Set(curr_level_idx, curr_node, right);
       return Status::NotFound();
-    } else {
-      prev_node = curr_node;
-      curr_node = GetNext(curr_node, 0);
     }
   }
 
-  if (value_node) {
-    *value_node = prev_node;
-  }
-  return Status::NotFound();
+  // We're not supposed to land here...
+  DCHECK(false);
 }
 
 Status CASDSkipList::Search(const Slice& key, SkipListNode **value_node,
@@ -143,6 +168,7 @@ Status CASDSkipList::Search(const Slice& key, SkipListNode **value_node,
 
 Status CASDSkipList::Insert(const Slice& key, const Slice& value, bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
+  DCHECK(GetEpoch()->IsProtected());
 
   SkipListNode *left = nullptr;
   SkipListNode *right = nullptr;
@@ -150,24 +176,24 @@ Status CASDSkipList::Insert(const Slice& key, const Slice& value, bool already_p
   uint64_t node_height = 1;
 
 retry:
-  Status ret = Traverse(key, &left);
+  auto *array = GetTlsPathArray();
+  Status ret = Traverse(key, nullptr);
+  array->Get(0, &left, &right);
+  DCHECK(left);
+  DCHECK(right);
   if (ret == Status::OK()) {
-    DCHECK(left);
+    // Reclaim the allocated space (if applicable)
+    if (node) {
+      FreeNode(nullptr, node);
+    }
     return Status::KeyAlreadyExists();
   }
-  DCHECK(left);
 
-  // Get the right neighbour and see if it is indeed greater, otherwise fast forward
-  right = GetNext(left, 0);
-  if (right != &tail_) {
-    Slice right_key(right->GetKey(), right->key_size);
-    int cmp = right_key.compare(key);
-    if (cmp == 0) {
-      return Status::KeyAlreadyExists();
-    } else if (cmp < 0) {
-      goto retry;
-    }
-  }
+  // XXX(shiges): Traverse() should have ensured the following property
+  DCHECK(left == &head_ ||
+         key.compare(Slice(left->GetKey(), left->key_size)) > 0);
+  DCHECK(right == &tail_ ||
+         key.compare(Slice(right->GetKey(), right->key_size)) < 0);
 
   // Now prepare a node and try to insert it between left and right
   if (!node) {
@@ -182,15 +208,30 @@ retry:
       h >>= 1;
     }
     node_height = std::min<uint32_t>(node_height, SKIPLIST_MAX_HEIGHT);
+    new (node) SkipListNode(key, value, node_height);
   }
-  new (node) SkipListNode(key, value, 1); //node_height);
 
   // Build the lowest level first
   node->next[0] = right;
   node->prev[0] = left;
 
+  for (uint64_t i = 1; i < node_height; ++i) {
+    SkipListNode *left = nullptr;
+    SkipListNode *right = nullptr;
+    if (i <= array->max_level) {
+      array->Get(i, &left, &right);
+    } else {
+      left = &head_;
+      right = &tail_;
+    }
+
+    node->prev[i] = left;
+    node->next[i] = right;
+  }
+
   // Link with pred in the lowest level
   if (CompareExchange64(&left->next[0], node, right) != right) {
+    // TODO(shiges): implement InsertBefore()
     goto retry;
   }
 
@@ -199,6 +240,13 @@ retry:
   // true predecessor of [right]
   CorrectPrev(left, right, 0);
 
+  // If [right] is deleted by a concurrent thread, the above CorrectPrev() would
+  // be aborted, and we risk linking [node] to a deleted node, which confuses
+  // garbage collection. Make sure we are linking to an non-deleted node by finding
+  // the logical successor.
+  GetNext(node, 0);
+
+  // Now we're sure that the insertion will eventually succeed.
   // Finish building the remaining levels
   // See if we are growing the list; if so, increase it to enable the next/prev pointers
   uint64_t current_height = height;
@@ -206,35 +254,24 @@ retry:
     while (CompareExchange64(&height, node_height, current_height) < node_height) {}
   }
 
-  auto *stack = GetTlsPathStack();
   for (uint16_t i = 1; i < node_height; ++i) {
-    if (stack->count > 0) {
-      left = stack->Pop();
-      // XXX(tzwang): the check below won't always succeed - towers are first
-      // linked, and then have their height updated. It should be safe to ignore
-      // this.
-      // DCHECK(left == &head_ || left->height > i);
-    } else {
-      left = &head_;
-    }
-  build_tower:
-    right = GetNext(left, i);
-    if (right != &tail_) {
-      Slice right_key(right->GetKey(), right->key_size);
-      int cmp = right_key.compare(key);
-      if (cmp == 0) {
-        // Someone else acted faster - continue to the next level (if any)
-        continue;
-      } else if (cmp < 0) {
-        left = right;
-        goto build_tower;
-      } else {
-        // Good to build it, but need to see if we are the first
-      }
-    }
+    left = node->prev[i];
+    right = node->next[i];
 
-    node->prev[i] = left;
-    node->next[i] = right;
+    DCHECK(left == &head_ ||
+          key.compare(Slice(left->GetKey(), left->key_size)) > 0);
+    DCHECK(right == &tail_ ||
+          key.compare(Slice(right->GetKey(), right->key_size)) < 0);
+
+    if ((uint64_t)right & SkipListNode::kNodeDeleted) {
+      // This node has already been deleted by a concurrent thread. Just don't bother
+      // linking it and stop. Note that on all the higher levels this node should have
+      // been marked deleted as well (because the deleter marks the ptrs from top to
+      // bottom), so we don't need to check the higher levels.
+      // This is rather an optimization, though, since if [node] is already marked
+      // deleted at the time of insertion, CorrectPrev() would remove it anyway.
+      break;
+    }
 
     if (CompareExchange64(&left->next[i], node, right) != right) {
       // Failed, give up?
@@ -242,9 +279,11 @@ retry:
       break;
     }
 
-    // Succeeded, increment node height and setup the prev pointer
-    ++node->height;
+    // Succeeded, setup the prev pointer
     CorrectPrev(left, right, i);
+
+    // Validate the successor
+    GetNext(node, i);
   }
 
   return Status::OK();
@@ -280,14 +319,7 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
         // Try to fix prev.prev.next to point to [node] to unlink this node ([prev])
         SkipListNode *desired = CleanPtr(prev2);
         //uint64_t desired = ((uint64_t)prev2 & ~SkipListNode::kNodeDeleted);
-        if (prev == CompareExchange64(&last_link->next[level], desired, prev)) {
-          // We need to unlink the node in all levels, so put the node only when
-          // we have unlinked all levels
-          if (Decrement64(&prev->height) == 0) {
-            Status s = GetGarbageList()->Push(prev, CASDSkipList::FreeNode, nullptr);
-            RAW_CHECK(s.ok(), "failed recycling node");
-          }
-        }
+        CompareExchange64(&last_link->next[level], desired, prev);
         prev = last_link;
         last_link = nullptr;
         continue;
@@ -308,9 +340,10 @@ SkipListNode *CASDSkipList::CorrectPrev(SkipListNode *prev, SkipListNode *node, 
       continue;
     }
     // Now [prev] should be the true predecessor, try a CAS to finalize it
+    DCHECK(((uint64_t)prev & SkipListNode::kNodeDeleted) == 0);
     SkipListNode *p = CleanPtr(prev); // (SkipListNode *)((uint64_t)prev & ~SkipListNode::kNodeDeleted);
     if (link1 == CompareExchange64(&node->prev[level], p, link1)) {
-      if ((uint64_t)prev->prev & SkipListNode::kNodeDeleted) {
+      if ((uint64_t)prev->prev[level] & SkipListNode::kNodeDeleted) {
         continue;
       }
       break;
@@ -330,12 +363,14 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
 
   DCHECK(node);
 
-  // Start from the lowest level to delete nodes.
+  // Start from the highest level to delete nodes.
   // To delete a node (in a level), mark the [next] pointer first, then mark the
   // deleted bit in [prev] pointer (must follow this order).
   // Only the thread that succeeded marking [next] would continue to mark [prev].
   uint32_t node_height = node->height;
-  for (uint32_t level = 0; level < node_height; level++) {
+  bool deleted = false;
+  for (uint32_t h = node_height; h > 0; h--) {
+    uint32_t level = h - 1;
     while (true) {
       SkipListNode *node_next = node->next[level];
       if ((uint64_t)node_next & SkipListNode::kNodeDeleted) {
@@ -345,6 +380,11 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
 
       SkipListNode *p = (SkipListNode *)((uint64_t)node_next | SkipListNode::kNodeDeleted);
       if (node_next == CompareExchange64(&node->next[level], p, node_next)) {
+        if (level == 0) {
+          // Among all the concurrent deleters, I'm the one that's going
+          // to report something positive to the user.
+          deleted = true;
+        }
         // Continue to mark the [prev] pointer
         SkipListNode *prev = nullptr;
         while (true) {
@@ -366,7 +406,16 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
       }
     }
   }
-  return Status::OK();
+
+  if (deleted) {
+    Status s = GetGarbageList()->Push(node, CASDSkipList::FreeNode, nullptr);
+    RAW_CHECK(s.ok(), "failed recycling node");
+    return Status::OK();
+  } else {
+    // The deletion was logically fulfilled by another thread. I'm reporting
+    // something negative to the user.
+    return Status::NotFound();
+  }
 }
 
 void CASDSkipList::SanityCheck(bool print) {
