@@ -235,8 +235,8 @@ class CASDSkipList {
     return &array;
   }
 
-  inline GarbageListUnsafe* GetGarbageList() {
-    thread_local GarbageListUnsafe garbage_list;
+  inline GarbageListUnsafePersistent* GetGarbageList() {
+    thread_local GarbageListUnsafePersistent garbage_list;
     thread_local bool initialized = false;
     if (!initialized) {
       auto s = garbage_list.Initialize(&epoch_);
