@@ -90,7 +90,7 @@ Status CASDSkipList::Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node
 
   nv_ptr<SkipListNode> prev_node = nullptr;
   nv_ptr<SkipListNode> curr_node = &head_;
-  int32_t curr_level_idx = height - 1;
+  uint32_t curr_level_idx = READ(height) - 1;
   DCHECK((((uint64_t)head_.next[curr_level_idx] & SkipListNode::kNodeDeleted)) == 0);
 
   DCHECK(curr_node);
@@ -219,7 +219,7 @@ retry:
   node->next[0] = right;
   node->prev[0] = left;
 
-  for (uint64_t i = 1; i < node_height; ++i) {
+  for (uint32_t i = 1; i < node_height; ++i) {
     nv_ptr<SkipListNode> left = nullptr;
     nv_ptr<SkipListNode> right = nullptr;
     if (i <= array->max_level) {
@@ -257,9 +257,9 @@ retry:
   // Now we're sure that the insertion will eventually succeed.
   // Finish building the remaining levels
   // See if we are growing the list; if so, increase it to enable the next/prev pointers
-  uint64_t current_height = height;
+  uint64_t current_height = READ(height);
   if (node_height > current_height) {
-    while (CompareExchange64(&height, node_height, current_height) < node_height) {}
+    while (PersistentCAS(&height, node_height, current_height) < node_height) {}
   }
 
   for (uint16_t i = 1; i < node_height; ++i) {

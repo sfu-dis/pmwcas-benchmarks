@@ -96,7 +96,8 @@ struct SkipListNode {
 };
 
 #if defined(PMEM) && PERSISTENT_CAS_ADR == 1
-inline nv_ptr<SkipListNode> ResolveNodePointer(nv_ptr<SkipListNode>* addr) {
+template <typename T>
+inline T ResolveNodePointer(T* addr) {
   return persistent_ptr::read(reinterpret_cast<uint64_t*>(addr));
 }
 #define READ(x) ResolveNodePointer(&x)
