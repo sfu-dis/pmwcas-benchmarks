@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 
+#ifdef PMEM
 namespace pmwcas {
 struct PMAllocTable {
   static constexpr uint64_t kMaxEntries = 256;
@@ -22,9 +23,10 @@ class PMAllocHelper {
     return &helper;
   }
 
-  void Initialize(PMAllocTable **table_addr) {
-    pmwcas::Allocator::Get()->Allocate(reinterpret_cast<void **>(table_addr),
-                                       sizeof(PMAllocTable));
+  void Initialize(nv_ptr<PMAllocTable> *table_addr) {
+    auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+    allocator->AllocateOffset(reinterpret_cast<uint64_t *>(table_addr),
+                              sizeof(PMAllocTable), false);
     this->table = new (*table_addr) PMAllocTable();
     std::cerr << "PMAllocTable initialized to " << this->table << std::endl;
   }
@@ -35,6 +37,7 @@ class PMAllocHelper {
       auto pos = next.fetch_add(1);
       auto &entry = table->entries[pos];
       my_ptr = &entry.addr;
+      Thread::RegisterTls((uint64_t *)&my_ptr, (uint64_t)nullptr);
     }
     RAW_CHECK(my_ptr != nullptr, "Tls ptr is nullptr");
     return my_ptr;
@@ -45,3 +48,4 @@ class PMAllocHelper {
   PMAllocTable *table{nullptr};
 };
 }  // namespace pmwcas
+#endif

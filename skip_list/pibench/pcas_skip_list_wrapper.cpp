@@ -6,11 +6,24 @@ extern "C" tree_api* create_tree(const tree_options_t& opt) {
 
 pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
-  // TODO(shiges): volatile only for now
+#ifdef PMEM
+  pmwcas::InitLibrary(
+      pmwcas::PMDKAllocator::Create(opt.pool_path.c_str(), "skip_list_layout",
+                                    opt.pool_size),
+      pmwcas::PMDKAllocator::Destroy, pmwcas::LinuxEnvironment::Create,
+      pmwcas::LinuxEnvironment::Destroy);
+  auto allocator =
+      reinterpret_cast<pmwcas::PMDKAllocator*>(pmwcas::Allocator::Get());
+  slist_ = reinterpret_cast<pmwcas::CASDSkipList*>(
+      allocator->GetRoot(sizeof(pmwcas::CASDSkipList)));
+  new (slist_) pmwcas::CASDSkipList;
+  pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
+#else
   pmwcas::InitLibrary(
       pmwcas::DefaultAllocator::Create, pmwcas::DefaultAllocator::Destroy,
       pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
   slist_ = new pmwcas::CASDSkipList();
+#endif
 }
 
 pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
@@ -24,7 +37,7 @@ pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
 
 bool pcas_skip_list_wrapper::find(const char* key, size_t key_sz,
                                   char* value_out) {
-  pmwcas::SkipListNode* vnode = nullptr;
+  pmwcas::nv_ptr<pmwcas::SkipListNode> vnode = nullptr;
   pmwcas::Slice k(key, key_sz);
 
   // FIXME(shiges): It looks like the memcpy followed by the
