@@ -25,7 +25,7 @@ CASDSkipList::CASDSkipList() {
 #endif
 }
 
-nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t level) {
+nv_ptr<SkipListNode> CASDSkipList::getNext(nv_ptr<SkipListNode> node, uint32_t level) {
   // return CleanPtr(node->next[level]);
   DCHECK(GetEpoch()->IsProtected());
 
@@ -56,7 +56,7 @@ nv_ptr<SkipListNode> CASDSkipList::GetNext(nv_ptr<SkipListNode> node, uint32_t l
   }
 }
 
-nv_ptr<SkipListNode> CASDSkipList::GetPrev(nv_ptr<SkipListNode> node, uint32_t level) {
+nv_ptr<SkipListNode> CASDSkipList::getPrev(nv_ptr<SkipListNode> node, uint32_t level) {
   DCHECK(GetEpoch()->IsProtected());
 
   while (true) {
@@ -83,94 +83,7 @@ nv_ptr<SkipListNode> CASDSkipList::GetPrev(nv_ptr<SkipListNode> node, uint32_t l
   }
 }
 
-Status CASDSkipList::Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node) {
-  DCHECK(GetEpoch()->IsProtected());
-  auto *array = GetTlsPathArray();
-  array->Reset();
-
-  nv_ptr<SkipListNode> prev_node = nullptr;
-  nv_ptr<SkipListNode> curr_node = &head_;
-  uint32_t curr_level_idx = READ(height) - 1;
-  DCHECK((((uint64_t)head_.next[curr_level_idx] & SkipListNode::kNodeDeleted)) == 0);
-
-  DCHECK(curr_node);
-  DCHECK(curr_node->next[curr_level_idx]);
-
-  // Drill down to the lowest level
-  while (curr_level_idx > 0) {
-    // Descend until the right isn't tail
-    auto right = GetNext(curr_node, curr_level_idx);
-    if (right == &tail_) {
-      array->Set(curr_level_idx, curr_node, right);
-      --curr_level_idx;
-      continue;
-    }
-
-    // Look right to see if we can move there
-    Slice right_key(right->GetKey(), right->key_size);
-    int cmp = key.compare(right_key);
-    if (cmp > 0) {
-      // Right key smaller than target key, move there
-      prev_node = curr_node;
-      curr_node = right;
-    } else {
-      // Right is too big, go down
-      array->Set(curr_level_idx, curr_node, right);
-      --curr_level_idx;
-    }
-  }
-
-  // Now at the lowest level, do linear search starting from [curr_node]
-  DCHECK(curr_level_idx == 0);
-  DCHECK(curr_node != &tail_);
-  DCHECK(curr_node == &head_ ||
-         memcmp(key.data(), curr_node->GetKey(), key.size()) > 0);
-  while (true) {
-    auto right = GetNext(curr_node, curr_level_idx);
-    if (right == &tail_) {
-      // Traversal reaches tail - not found
-      array->Set(curr_level_idx, curr_node, right);
-      if (value_node) {
-        *value_node = curr_node;
-      }
-      return Status::NotFound();
-    }
-
-    // Look right to see if we can move there
-    Slice right_key(right->GetKey(), right->key_size);
-    int cmp = key.compare(right_key);
-    if (cmp == 0) {
-      // Found the target key
-      if (value_node) {
-        *value_node = right;
-      }
-      array->Set(curr_level_idx, curr_node, right);
-      return Status::OK();
-    } else if (cmp > 0) {
-      // Right key smaller than target key, move there
-      prev_node = curr_node;
-      curr_node = right;
-    } else {
-      // Too big - not found;
-      if (value_node) {
-        *value_node = curr_node;
-      }
-      array->Set(curr_level_idx, curr_node, right);
-      return Status::NotFound();
-    }
-  }
-
-  // We're not supposed to land here...
-  DCHECK(false);
-}
-
-Status CASDSkipList::Search(const Slice& key, nv_ptr<SkipListNode> *value_node,
-                            bool already_protected) {
-  EpochGuard guard(GetEpoch(), !already_protected);
-  return Traverse(key, value_node);
-}
-
-Status CASDSkipList::Insert(const Slice& key, const Slice& value, bool already_protected) {
+Status CASDSkipList::insert(const Slice& key, const Slice& value, bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
   DCHECK(GetEpoch()->IsProtected());
 
@@ -360,7 +273,7 @@ nv_ptr<SkipListNode> CASDSkipList::CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr
   return prev;
 }
 
-Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
+Status CASDSkipList::remove(const Slice& key, bool already_protected) {
   EpochGuard guard(GetEpoch(), !already_protected);
   nv_ptr<SkipListNode> node = nullptr;
   Status ret = Traverse(key, &node);
@@ -423,37 +336,6 @@ Status CASDSkipList::Delete(const Slice& key, bool already_protected) {
     // The deletion was logically fulfilled by another thread. I'm reporting
     // something negative to the user.
     return Status::NotFound();
-  }
-}
-
-void CASDSkipList::SanityCheck(bool print) {
-  for (uint16_t i = 0; i < height; ++i) {//SKIPLIST_MAX_HEIGHT; ++i) {
-    nv_ptr<SkipListNode> curr_node = &head_;
-    while (curr_node != &tail_) {
-      if (print) {
-        if (curr_node == &head_) {
-          std::cout << "HEAD";
-        } else {
-          std::cout << "->" << *(uint64_t*)curr_node->GetKey();
-        }
-      }
-
-      nv_ptr<SkipListNode> right_node = GetNext(curr_node, i);
-      //RAW_CHECK(right_node->prev[i] == curr_node, "next/prev don't match");
-
-      Slice curr_key(curr_node->GetKey(), curr_node->key_size);
-      Slice right_key(right_node->GetKey(), right_node->key_size);
-      int cmp = curr_key.compare(right_key);
-      if (cmp == 0) {
-        RAW_CHECK(curr_node == &head_, "duplicate key");
-      } else {
-        RAW_CHECK(cmp < 0 || right_node == &tail_, "left > right");
-      }
-      curr_node = GetNext(curr_node, i);
-    }
-    if (print) {
-      std::cout << "->TAIL" << std::endl;
-    }
   }
 }
 

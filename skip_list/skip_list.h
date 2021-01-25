@@ -118,25 +118,213 @@ inline T PersistentCompareExchange64(T* addr, T desired, T expected) {
   CompareExchange64(addr, desired, expected)
 #endif
 
+struct TlsPathArray {
+  SkipListNode *entries_[2 * SKIPLIST_MAX_HEIGHT];
+  uint64_t max_level;
+
+  TlsPathArray() : entries_{}, max_level(0) {}
+  inline void Reset() { max_level = 0; }
+  inline void Set(uint64_t level, SkipListNode *prev, SkipListNode *next) {
+    DCHECK(level < SKIPLIST_MAX_HEIGHT);
+    entries_[2 * level] = prev;
+    entries_[2 * level + 1] = next;
+    max_level = std::max(max_level, level);
+  }
+  inline void Get(uint64_t level, nv_ptr<SkipListNode> *prev, nv_ptr<SkipListNode> *next) {
+    DCHECK(level < SKIPLIST_MAX_HEIGHT);
+    *prev = entries_[2 * level];
+    *next = entries_[2 * level + 1];
+    max_level = std::max(max_level, level);
+  }
+};
+
 template <typename DSkipList>
 struct DSkipListCursor;
 
-class CASDSkipList {
+template <typename DSkipListImpl>
+class DSkipListBase {
  public:
-  CASDSkipList();
-  ~CASDSkipList() {}
+  DSkipListBase() {}
+  ~DSkipListBase() {}
+
+  /// polymorphic to implementations
+  /// Insert [key, value] to the skip list.
+  Status Insert(const Slice& key, const Slice& value, bool already_protected) {
+    return getImpl()->insert(key, value, already_protected);
+  }
+
+  /// Delete [key] from the skip list.
+  // XXX(shiges): "delete" is a C++ keyword, hence the "remove"...
+  Status Delete(const Slice& key, bool already_protected) {
+    return getImpl()->remove(key, already_protected);
+  }
+
+  nv_ptr<SkipListNode> GetNext(nv_ptr<SkipListNode> node, uint32_t level) {
+    return getImpl()->getNext(node, level);
+  }
+
+  nv_ptr<SkipListNode> GetPrev(nv_ptr<SkipListNode> node, uint32_t level) {
+    return getImpl()->getPrev(node, level);
+  }
+
+  /// common to all implementations
+  /// [*value_node] points to the found node, or if not found, the predecessor node
+  Status Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node);
+
+  /// Find the value of [key], result stored in [*value_node].
+  Status Search(const Slice& key, nv_ptr<SkipListNode> *value_node, bool already_protected) {
+    EpochGuard guard(GetEpoch(), !already_protected);
+    return Traverse(key, value_node);
+  }
+
+  inline bool IsHead(nv_ptr<SkipListNode> node) const { return &head_ == node; }
+
+  inline bool IsTail(nv_ptr<SkipListNode> node) const { return &tail_ == node; }
+
   void SanityCheck(bool print = false);
 
   inline EpochManager* GetEpoch() { return &epoch_; }
 
+  inline TlsPathArray* GetTlsPathArray() {
+    thread_local TlsPathArray array;
+    return &array;
+  }
+
+ protected:
+  friend class DSkipListCursor<DSkipListImpl>;
+
+  SkipListNode head_;  // head node, search starts here
+  SkipListNode tail_;  // tail node, search ends here
+  EpochManager epoch_;
+  uint64_t height;
+
+ private:
+  DSkipListImpl* getImpl() { return static_cast<DSkipListImpl*>(this); }
+};
+
+template <typename DSkipListImpl>
+Status DSkipListBase<DSkipListImpl>::Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node) {
+  DCHECK(GetEpoch()->IsProtected());
+  auto *array = GetTlsPathArray();
+  array->Reset();
+
+  nv_ptr<SkipListNode> prev_node = nullptr;
+  nv_ptr<SkipListNode> curr_node = &head_;
+  uint32_t curr_level_idx = READ(height) - 1;
+  DCHECK((((uint64_t)head_.next[curr_level_idx] & SkipListNode::kNodeDeleted)) == 0);
+
+  DCHECK(curr_node);
+  DCHECK(curr_node->next[curr_level_idx]);
+
+  // Drill down to the lowest level
+  while (curr_level_idx > 0) {
+    // Descend until the right isn't tail
+    auto right = GetNext(curr_node, curr_level_idx);
+    if (right == &tail_) {
+      array->Set(curr_level_idx, curr_node, right);
+      --curr_level_idx;
+      continue;
+    }
+
+    // Look right to see if we can move there
+    Slice right_key(right->GetKey(), right->key_size);
+    int cmp = key.compare(right_key);
+    if (cmp > 0) {
+      // Right key smaller than target key, move there
+      prev_node = curr_node;
+      curr_node = right;
+    } else {
+      // Right is too big, go down
+      array->Set(curr_level_idx, curr_node, right);
+      --curr_level_idx;
+    }
+  }
+
+  // Now at the lowest level, do linear search starting from [curr_node]
+  DCHECK(curr_level_idx == 0);
+  DCHECK(curr_node != &tail_);
+  DCHECK(curr_node == &head_ ||
+         memcmp(key.data(), curr_node->GetKey(), key.size()) > 0);
+  while (true) {
+    auto right = GetNext(curr_node, curr_level_idx);
+    if (right == &tail_) {
+      // Traversal reaches tail - not found
+      array->Set(curr_level_idx, curr_node, right);
+      if (value_node) {
+        *value_node = curr_node;
+      }
+      return Status::NotFound();
+    }
+
+    // Look right to see if we can move there
+    Slice right_key(right->GetKey(), right->key_size);
+    int cmp = key.compare(right_key);
+    if (cmp == 0) {
+      // Found the target key
+      if (value_node) {
+        *value_node = right;
+      }
+      array->Set(curr_level_idx, curr_node, right);
+      return Status::OK();
+    } else if (cmp > 0) {
+      // Right key smaller than target key, move there
+      prev_node = curr_node;
+      curr_node = right;
+    } else {
+      // Too big - not found;
+      if (value_node) {
+        *value_node = curr_node;
+      }
+      array->Set(curr_level_idx, curr_node, right);
+      return Status::NotFound();
+    }
+  }
+
+  // We're not supposed to land here...
+  DCHECK(false);
+}
+template <typename DSkipListImpl>
+void DSkipListBase<DSkipListImpl>::SanityCheck(bool print) {
+  for (uint64_t i = 0; i < height; ++i) {//SKIPLIST_MAX_HEIGHT; ++i) {
+    nv_ptr<SkipListNode> curr_node = &head_;
+    while (curr_node != &tail_) {
+      if (print) {
+        if (curr_node == &head_) {
+          std::cout << "HEAD";
+        } else {
+          std::cout << "->" << *(uint64_t*)curr_node->GetKey();
+        }
+      }
+
+      nv_ptr<SkipListNode> right_node = GetNext(curr_node, i);
+      //RAW_CHECK(right_node->prev[i] == curr_node, "next/prev don't match");
+
+      Slice curr_key(curr_node->GetKey(), curr_node->key_size);
+      Slice right_key(right_node->GetKey(), right_node->key_size);
+      int cmp = curr_key.compare(right_key);
+      if (cmp == 0) {
+        RAW_CHECK(curr_node == &head_, "duplicate key");
+      } else {
+        RAW_CHECK(cmp < 0 || right_node == &tail_, "left > right");
+      }
+      curr_node = GetNext(curr_node, i);
+    }
+    if (print) {
+      std::cout << "->TAIL" << std::endl;
+    }
+  }
+}
+
+class CASDSkipList : public DSkipListBase<CASDSkipList> {
+ public:
+  CASDSkipList();
+  ~CASDSkipList() {}
+
   /// Insert [key, value] to the skip list.
-  Status Insert(const Slice& key, const Slice& value, bool already_protected);
+  Status insert(const Slice& key, const Slice& value, bool already_protected);
 
   /// Delete [key] from the skip list.
-  Status Delete(const Slice& key, bool already_protected);
-
-  /// Find the value of [key], result stored in [*value_node].
-  Status Search(const Slice& key, nv_ptr<SkipListNode> *value_node, bool already_protected);
+  Status remove(const Slice& key, bool already_protected);
 
   /// Helper functions
   static inline nv_ptr<SkipListNode> CleanPtr(nv_ptr<SkipListNode> node) {
@@ -199,41 +387,9 @@ class CASDSkipList {
   /// it much slower than other variants. Just return the next node for now,
   /// the caller knows how to handle it anyway. In skip_list.cc the code that
   /// follows the original paper is commented out.
-  nv_ptr<SkipListNode> GetNext(nv_ptr<SkipListNode> node, uint32_t level);
+  nv_ptr<SkipListNode> getNext(nv_ptr<SkipListNode> node, uint32_t level);
 
-  nv_ptr<SkipListNode> GetPrev(nv_ptr<SkipListNode> node, uint32_t level);
-
-  inline bool IsHead(nv_ptr<SkipListNode> node) const { return &head_ == node; }
-
-  inline bool IsTail(nv_ptr<SkipListNode> node) const { return &tail_ == node; }
-
-  /// [*value_node] points to the found node, or if not found, the predecessor node
-  Status Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node);
-
-  struct PathArray {
-    SkipListNode *entries_[2 * SKIPLIST_MAX_HEIGHT];
-    uint64_t max_level;
-
-    PathArray() : entries_{}, max_level(0) {}
-    inline void Reset() { max_level = 0; }
-    inline void Set(uint64_t level, SkipListNode *prev, SkipListNode *next) {
-      DCHECK(level < SKIPLIST_MAX_HEIGHT);
-      entries_[2 * level] = prev;
-      entries_[2 * level + 1] = next;
-      max_level = std::max(max_level, level);
-    }
-    inline void Get(uint64_t level, nv_ptr<SkipListNode> *prev, nv_ptr<SkipListNode> *next) {
-      DCHECK(level < SKIPLIST_MAX_HEIGHT);
-      *prev = entries_[2 * level];
-      *next = entries_[2 * level + 1];
-      max_level = std::max(max_level, level);
-    }
-  };
-
-  inline PathArray* GetTlsPathArray() {
-    thread_local PathArray array;
-    return &array;
-  }
+  nv_ptr<SkipListNode> getPrev(nv_ptr<SkipListNode> node, uint32_t level);
 
   inline GarbageListUnsafePersistent* GetGarbageList() {
     thread_local GarbageListUnsafePersistent garbage_list;
@@ -245,14 +401,6 @@ class CASDSkipList {
     }
     return &garbage_list;
   }
-
- private:
-  friend class DSkipListCursor<CASDSkipList>;
-
-  SkipListNode head_;  // head node, search starts here
-  SkipListNode tail_;  // tail node, search ends here
-  EpochManager epoch_;
-  uint64_t height;
 
 #ifdef PMEM
  public:
