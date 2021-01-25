@@ -28,15 +28,16 @@ static void GenerateSliceFromInt(int64_t k, char *out) {
   memcpy(out, &swapped, sizeof(int64_t));
 };
 
-struct CASDSkipListTest : public PerformanceTest {
+template <typename DSkipList>
+struct DSkipListTest : public PerformanceTest {
   const int64_t kTotalInserts = 15000;
-  CASDSkipList *slist_;
+  DSkipList *slist_;
   std::atomic<int64_t> total_inserts_;
   Barrier barrier1_;
   Barrier barrier2_;
   Barrier barrier3_;
   uint64_t thread_count;
-  CASDSkipListTest(CASDSkipList *list, uint64_t thread_count)
+  DSkipListTest(DSkipList *list, uint64_t thread_count)
       : PerformanceTest{},
         slist_(list),
         total_inserts_(0),
@@ -90,7 +91,7 @@ struct CASDSkipListTest : public PerformanceTest {
     // Forward scan
     nnodes = 0;
     slist_->GetEpoch()->Protect();
-    CASDSkipListCursor cursor(slist_, true, true);
+    DSkipListCursor<DSkipList> cursor(slist_, true, true);
     slist_->GetEpoch()->Unprotect();
     while (true) {
       EpochGuard guard(slist_->GetEpoch());
@@ -105,7 +106,7 @@ struct CASDSkipListTest : public PerformanceTest {
     // Reverse scan
     nnodes = 0;
     slist_->GetEpoch()->Protect();
-    CASDSkipListCursor rcursor(slist_, false, true);
+    DSkipListCursor<DSkipList> rcursor(slist_, false, true);
     slist_->GetEpoch()->Unprotect();
     while (true) {
       EpochGuard guard(slist_->GetEpoch());
@@ -132,6 +133,8 @@ struct CASDSkipListTest : public PerformanceTest {
     Thread::ClearRegistry(true);
   }
 };
+
+using CASDSkipListTest = DSkipListTest<CASDSkipList>;
 
 void RunCASDSkipListTest(uint64_t thread_count) {
 #ifdef PMEM
