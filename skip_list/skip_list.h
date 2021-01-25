@@ -408,6 +408,42 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
 #endif
 };
 
+class MwCASDSkipList : public DSkipListBase<MwCASDSkipList> {
+ public:
+  MwCASDSkipList();
+  ~MwCASDSkipList() {}
+
+  /// Insert [key, value] to the skip list.
+  Status insert(const Slice& key, const Slice& value, bool already_protected);
+
+  /// Delete [key] from the skip list.
+  Status remove(const Slice& key, bool already_protected);
+
+  inline static nv_ptr<SkipListNode> readMwCASPtr(nv_ptr<SkipListNode>* node) {
+    nv_ptr<SkipListNode> n = *node;
+    if (MwcTargetField<uint64_t>::IsCleanPtr((uint64_t)n)) {
+      return n;
+    }
+    return (nv_ptr<SkipListNode>)(((MwcTargetField<uint64_t> *)node)
+                                    ->GetValueProtected());
+  }
+
+  inline nv_ptr<SkipListNode> getNext(nv_ptr<SkipListNode> node, uint32_t level) {
+    DCHECK(GetEpoch()->IsProtected());
+    nv_ptr<SkipListNode> next = readMwCASPtr(&node->next[level]);
+    return next;
+  }
+
+  inline nv_ptr<SkipListNode> getPrev(nv_ptr<SkipListNode> node, uint32_t level) {
+    DCHECK(GetEpoch()->IsProtected());
+    nv_ptr<SkipListNode> next = readMwCASPtr(&node->prev[level]);
+    return next;
+  }
+
+ public:
+  nv_ptr<DescriptorPool> desc_pool_{nullptr};
+};
+
 template <typename DSkipList>
 struct DSkipListCursor {
  public:
@@ -450,5 +486,6 @@ struct DSkipListCursor {
 };
 
 using CASDSkipListCursor = DSkipListCursor<CASDSkipList>;
+using MwCASDSkipListCursor = DSkipListCursor<MwCASDSkipList>;
 
 }  // namespace pmwcas

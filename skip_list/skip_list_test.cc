@@ -20,6 +20,7 @@ DEFINE_string(pmdk_pool, "/mnt/pmem0/skip_list_test_pool", "path to pmdk pool");
 
 struct PMDKRootObj {
   pmwcas::nv_ptr<pmwcas::CASDSkipList> list_{nullptr};
+  pmwcas::nv_ptr<pmwcas::MwCASDSkipList> mwlist_{nullptr};
 };
 #endif
 
@@ -135,6 +136,7 @@ struct DSkipListTest : public PerformanceTest {
 };
 
 using CASDSkipListTest = DSkipListTest<CASDSkipList>;
+using MwCASDSkipListTest = DSkipListTest<MwCASDSkipList>;
 
 void RunCASDSkipListTest(uint64_t thread_count) {
 #ifdef PMEM
@@ -164,6 +166,33 @@ void RunCASDSkipListTest(uint64_t thread_count) {
   Thread::ClearRegistry(true);
 }
 
+void RunMwCASDSkipListTest(uint64_t thread_count) {
+#ifdef PMEM
+  LOG(INFO) << "pool init to " << nv_ptr<int>(nullptr);
+  auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
+  auto root_obj =
+      reinterpret_cast<PMDKRootObj *>(allocator->GetRoot(sizeof(PMDKRootObj)));
+  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_),
+                            sizeof(MwCASDSkipList), false);
+  MwCASDSkipList *list = root_obj->mwlist_;
+  new (list) MwCASDSkipList;
+#else
+  MwCASDSkipList *list = new MwCASDSkipList;
+#endif
+  MwCASDSkipListTest test(list, thread_count);
+  test.Run(thread_count);
+  {
+    EpochGuard guard(list->GetEpoch());
+    list->SanityCheck(true);
+  }
+#ifdef PMEM
+  allocator->FreeOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_));
+#else
+  delete list;
+#endif
+  Thread::ClearRegistry(true);
+}
+
 GTEST_TEST(CASDSkipListTest, SingleThread) {
   uint32_t thread_count = 1;
   RunCASDSkipListTest(thread_count);
@@ -173,6 +202,17 @@ GTEST_TEST(CASDSkipListTest, Concurrent) {
   uint32_t thread_count =
       std::max<uint32_t>(Environment::Get()->GetCoreCount() / 2, 1);
   RunCASDSkipListTest(thread_count);
+}
+
+GTEST_TEST(MwCASDSkipListTest, SingleThread) {
+  uint32_t thread_count = 1;
+  RunMwCASDSkipListTest(thread_count);
+}
+
+GTEST_TEST(MwCASDSkipListTest, Concurrent) {
+  uint32_t thread_count =
+      std::max<uint32_t>(Environment::Get()->GetCoreCount() / 2, 1);
+  RunMwCASDSkipListTest(thread_count);
 }
 
 int main(int argc, char **argv) {

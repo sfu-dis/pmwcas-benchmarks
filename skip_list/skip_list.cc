@@ -339,4 +339,39 @@ Status CASDSkipList::remove(const Slice& key, bool already_protected) {
   }
 }
 
+MwCASDSkipList::MwCASDSkipList() {
+  Status s = epoch_.Initialize();
+  RAW_CHECK(s.ok(), "epoch init failure");
+
+  for (uint32_t i = 0; i < SKIPLIST_MAX_HEIGHT; ++i) {
+    head_.next[i] = &tail_;
+    head_.prev[i] = nullptr;
+    tail_.next[i] = nullptr;
+    tail_.prev[i] = &head_;
+  }
+
+  height = head_.height = tail_.height = 1;
+  DCHECK(head_.key_size == 0);
+  DCHECK(head_.payload_size == 0);
+  DCHECK(tail_.key_size == 0);
+  DCHECK(tail_.payload_size == 0);
+
+#ifdef PMEM
+  NVRAM::Flush(sizeof(MwCASDSkipList), this);
+#endif
+}
+
+Status MwCASDSkipList::insert(const Slice& key, const Slice& value, bool already_protected) {
+  EpochGuard guard(GetEpoch(), !already_protected);
+  DCHECK(GetEpoch()->IsProtected());
+
+  return Status::Aborted();
+}
+
+Status MwCASDSkipList::remove(const Slice& key, bool already_protected) {
+  EpochGuard guard(GetEpoch(), !already_protected);
+
+  return Status::Aborted();
+}
+
 }  // namespace pmwcas
