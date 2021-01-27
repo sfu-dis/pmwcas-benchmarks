@@ -266,11 +266,6 @@ retry:
     left = READ(node->prev[i]);
     right = READ(node->next[i]);
 
-    DCHECK(left == &head_ ||
-          key.compare(Slice(left->GetKey(), left->key_size)) > 0);
-    DCHECK(right == &tail_ ||
-          key.compare(Slice(right->GetKey(), right->key_size)) < 0);
-
     if ((uint64_t)right & SkipListNode::kNodeDeleted) {
       // This node has already been deleted by a concurrent thread. Just don't bother
       // linking it and stop. Note that on all the higher levels this node should have
@@ -280,6 +275,11 @@ retry:
       // deleted at the time of insertion, CorrectPrev() would remove it anyway.
       break;
     }
+
+    DCHECK(left == &head_ ||
+          key.compare(Slice(left->GetKey(), left->key_size)) > 0);
+    DCHECK(right == &tail_ ||
+          key.compare(Slice(right->GetKey(), right->key_size)) < 0);
 
     if (PersistentCAS(&left->next[i], node, right) != right) {
       // Failed, give up?
