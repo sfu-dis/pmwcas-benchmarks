@@ -263,8 +263,8 @@ retry:
   }
 
   for (uint16_t i = 1; i < node_height; ++i) {
-    left = node->prev[i];
-    right = node->next[i];
+    left = READ(node->prev[i]);
+    right = READ(node->next[i]);
 
     DCHECK(left == &head_ ||
           key.compare(Slice(left->GetKey(), left->key_size)) > 0);
