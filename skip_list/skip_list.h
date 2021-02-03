@@ -167,6 +167,8 @@ class DSkipListBase {
     return getImpl()->getPrev(node, level);
   }
 
+  inline EpochManager* GetEpoch() { return getImpl()->getEpoch(); }
+
   /// common to all implementations
   /// Helper functions
   inline static nv_ptr<SkipListNode> CleanPtr(nv_ptr<SkipListNode> node) {
@@ -188,8 +190,6 @@ class DSkipListBase {
 
   void SanityCheck(bool print = false);
 
-  inline EpochManager* GetEpoch() { return &epoch_; }
-
   inline TlsPathArray* GetTlsPathArray() {
     thread_local TlsPathArray array;
     return &array;
@@ -200,7 +200,6 @@ class DSkipListBase {
 
   SkipListNode head_;  // head node, search starts here
   SkipListNode tail_;  // tail node, search ends here
-  EpochManager epoch_;
   uint64_t height;
 
  private:
@@ -404,10 +403,14 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
     return &garbage_list;
   }
 
+  inline EpochManager* getEpoch() { return &epoch_; }
+
 #ifdef PMEM
  public:
   nv_ptr<PMAllocTable> table_{nullptr};
 #endif
+
+  EpochManager epoch_;
 };
 
 class MwCASDSkipList : public DSkipListBase<MwCASDSkipList> {
@@ -468,6 +471,11 @@ class MwCASDSkipList : public DSkipListBase<MwCASDSkipList> {
     }
     DCHECK(!((uint64_t)prev & SkipListNode::kNodeDeleted));
     return prev;
+  }
+
+  inline EpochManager* getEpoch() {
+    DCHECK(desc_pool_);
+    return desc_pool_->GetEpoch();
   }
 
  public:
