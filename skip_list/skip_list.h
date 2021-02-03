@@ -168,6 +168,11 @@ class DSkipListBase {
   }
 
   /// common to all implementations
+  /// Helper functions
+  inline static nv_ptr<SkipListNode> CleanPtr(nv_ptr<SkipListNode> node) {
+    return (nv_ptr<SkipListNode>)((uint64_t)node & ~SkipListNode::kNodeDeleted);
+  }
+
   /// [*value_node] points to the found node, or if not found, the predecessor node
   Status Traverse(const Slice& key, nv_ptr<SkipListNode> *value_node);
 
@@ -270,6 +275,7 @@ Status DSkipListBase<DSkipListImpl>::Traverse(const Slice& key, nv_ptr<SkipListN
       // Right key smaller than target key, move there
       prev_node = curr_node;
       curr_node = right;
+      DCHECK(curr_node);
     } else {
       // Too big - not found;
       if (value_node) {
@@ -283,6 +289,7 @@ Status DSkipListBase<DSkipListImpl>::Traverse(const Slice& key, nv_ptr<SkipListN
   // We're not supposed to land here...
   DCHECK(false);
 }
+
 template <typename DSkipListImpl>
 void DSkipListBase<DSkipListImpl>::SanityCheck(bool print) {
   for (uint64_t i = 0; i < height; ++i) {//SKIPLIST_MAX_HEIGHT; ++i) {
@@ -326,11 +333,6 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
   /// Delete [key] from the skip list.
   Status remove(const Slice& key, bool already_protected);
 
-  /// Helper functions
-  static inline nv_ptr<SkipListNode> CleanPtr(nv_ptr<SkipListNode> node) {
-    return (nv_ptr<SkipListNode>)((uint64_t)node & ~SkipListNode::kNodeDeleted);
-  }
-
   /// Helper function to setup [node].prev properly
   /// @prev: a "suggested" predecessor of [node] that would allow the algorithm
   ///        to locate the true predecessor of [node]; might be an old
@@ -339,7 +341,7 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
   /// Returns the predecessor set for [node] on node.prev
   nv_ptr<SkipListNode> CorrectPrev(nv_ptr<SkipListNode> prev, nv_ptr<SkipListNode> node, uint16_t level);
 
-  inline void MarkNodePointer(nv_ptr<SkipListNode> *node) {
+  inline static void MarkNodePointer(nv_ptr<SkipListNode> *node) {
     uint64_t flags = SkipListNode::kNodeDeleted;
     while (true) {
       nv_ptr<SkipListNode> node_ptr = READ(*node);
@@ -356,11 +358,11 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
   /// Allocate a node
   inline void AllocateNode(nv_ptr<SkipListNode> *node, uint32_t key_size, uint32_t value_size) {
 #ifdef PMEM
-  auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
-  uint64_t* tls_addr = (uint64_t*)PMAllocHelper::Get()->GetTlsPtr();
-  allocator->AllocateOffset(
-      tls_addr, sizeof(SkipListNode) + key_size + value_size, false);
-  *node = nv_ptr<SkipListNode>(*tls_addr);
+    auto allocator = reinterpret_cast<PMDKAllocator*>(Allocator::Get());
+    uint64_t* tls_addr = (uint64_t*)PMAllocHelper::Get()->GetTlsPtr();
+    allocator->AllocateOffset(
+        tls_addr, sizeof(SkipListNode) + key_size + value_size, false);
+    *node = nv_ptr<SkipListNode>(*tls_addr);
 #else
     Allocator::Get()->AllocateAligned(
       (void**)node, sizeof(SkipListNode) + key_size + value_size,
@@ -410,7 +412,7 @@ class CASDSkipList : public DSkipListBase<CASDSkipList> {
 
 class MwCASDSkipList : public DSkipListBase<MwCASDSkipList> {
  public:
-  MwCASDSkipList();
+  MwCASDSkipList(DescriptorPool* pool);
   ~MwCASDSkipList() {}
 
   /// Insert [key, value] to the skip list.
@@ -430,14 +432,42 @@ class MwCASDSkipList : public DSkipListBase<MwCASDSkipList> {
 
   inline nv_ptr<SkipListNode> getNext(nv_ptr<SkipListNode> node, uint32_t level) {
     DCHECK(GetEpoch()->IsProtected());
-    nv_ptr<SkipListNode> next = readMwCASPtr(&node->next[level]);
+    if (node == &tail_) {
+      return nullptr;
+    }
+    nv_ptr<SkipListNode> next = CleanPtr(readMwCASPtr(&node->next[level]));
+    while (true) {
+      if (next == &tail_) {
+        break;
+      }
+      auto next_next = readMwCASPtr(&next->next[level]);
+      if (!((uint64_t)next_next & SkipListNode::kNodeDeleted)) {
+        break;
+      }
+      next = CleanPtr(next_next);
+    }
+    DCHECK(!((uint64_t)next & SkipListNode::kNodeDeleted));
     return next;
   }
 
   inline nv_ptr<SkipListNode> getPrev(nv_ptr<SkipListNode> node, uint32_t level) {
     DCHECK(GetEpoch()->IsProtected());
-    nv_ptr<SkipListNode> next = readMwCASPtr(&node->prev[level]);
-    return next;
+    if (node == &head_) {
+      return nullptr;
+    }
+    nv_ptr<SkipListNode> prev = readMwCASPtr(&node->prev[level]);
+    while (true) {
+      if (prev == &head_) {
+        break;
+      }
+      auto prev_next = readMwCASPtr(&prev->next[level]);
+      if (!((uint64_t)prev_next & SkipListNode::kNodeDeleted)) {
+        break;
+      }
+      prev = CleanPtr(readMwCASPtr(&prev->prev[level]));;
+    }
+    DCHECK(!((uint64_t)prev & SkipListNode::kNodeDeleted));
+    return prev;
   }
 
  public:

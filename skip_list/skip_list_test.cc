@@ -21,6 +21,7 @@ DEFINE_string(pmdk_pool, "/mnt/pmem0/skip_list_test_pool", "path to pmdk pool");
 struct PMDKRootObj {
   pmwcas::nv_ptr<pmwcas::CASDSkipList> list_{nullptr};
   pmwcas::nv_ptr<pmwcas::MwCASDSkipList> mwlist_{nullptr};
+  pmwcas::nv_ptr<pmwcas::DescriptorPool> desc_pool_{nullptr};
 };
 #endif
 
@@ -172,12 +173,17 @@ void RunMwCASDSkipListTest(uint64_t thread_count) {
   auto allocator = reinterpret_cast<PMDKAllocator *>(Allocator::Get());
   auto root_obj =
       reinterpret_cast<PMDKRootObj *>(allocator->GetRoot(sizeof(PMDKRootObj)));
+  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
+                            sizeof(DescriptorPool), false);
   allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_),
                             sizeof(MwCASDSkipList), false);
+  DescriptorPool *pool = root_obj->desc_pool_;
   MwCASDSkipList *list = root_obj->mwlist_;
-  new (list) MwCASDSkipList;
+  new (pool) DescriptorPool(100000, thread_count, false);
+  new (list) MwCASDSkipList(pool);
 #else
-  MwCASDSkipList *list = new MwCASDSkipList;
+  DescriptorPool *pool = new DescriptorPool(100000, thread_count, false);
+  MwCASDSkipList *list = new MwCASDSkipList(pool);
 #endif
   MwCASDSkipListTest test(list, thread_count);
   test.Run(thread_count);
@@ -187,8 +193,10 @@ void RunMwCASDSkipListTest(uint64_t thread_count) {
   }
 #ifdef PMEM
   allocator->FreeOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_));
+  allocator->FreeOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_));
 #else
   delete list;
+  delete pool;
 #endif
   Thread::ClearRegistry(true);
 }
