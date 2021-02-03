@@ -1,11 +1,17 @@
 #include "pmwcas_skip_list_wrapper.hpp"
 
+inline static bool FileExists(const char *pool_path) {
+  struct stat buffer;
+  return (stat(pool_path, &buffer) == 0);
+}
+
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
   return new pmwcas_skip_list_wrapper(opt);
 }
 
 pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
+  bool recovery = FileExists(opt.pool_path.c_str());
 #ifdef PMEM
   pmwcas::InitLibrary(
       pmwcas::PMDKAllocator::Create(opt.pool_path.c_str(), "skip_list_layout",
@@ -16,14 +22,20 @@ pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
       reinterpret_cast<pmwcas::PMDKAllocator*>(pmwcas::Allocator::Get());
   auto root_obj = reinterpret_cast<pmwcas_skip_list_wrapper_pmdk_obj *>(
       allocator->GetRoot(sizeof(pmwcas_skip_list_wrapper_pmdk_obj)));
-  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
-                            sizeof(pmwcas::DescriptorPool), false);
-  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_),
-                            sizeof(pmwcas::MwCASDSkipList), false);
-  pool_ = root_obj->desc_pool_;
-  slist_ = root_obj->mwlist_;
-  new (pool_) pmwcas::DescriptorPool(100000, opt.num_threads, false);
-  new (slist_) pmwcas::MwCASDSkipList(pool_);
+  if (recovery) {
+    pool_ = root_obj->desc_pool_;
+    pool_->Recovery(0, false);
+    slist_ = root_obj->mwlist_;
+  } else {
+    allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
+                              sizeof(pmwcas::DescriptorPool), false);
+    allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_),
+                              sizeof(pmwcas::MwCASDSkipList), false);
+    pool_ = root_obj->desc_pool_;
+    slist_ = root_obj->mwlist_;
+    new (pool_) pmwcas::DescriptorPool(100000, opt.num_threads, false);
+    new (slist_) pmwcas::MwCASDSkipList(pool_);
+  }
 #else
   pmwcas::InitLibrary(
       pmwcas::DefaultAllocator::Create, pmwcas::DefaultAllocator::Destroy,

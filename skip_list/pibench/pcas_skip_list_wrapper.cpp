@@ -1,11 +1,17 @@
 #include "pcas_skip_list_wrapper.hpp"
 
+inline static bool FileExists(const char *pool_path) {
+  struct stat buffer;
+  return (stat(pool_path, &buffer) == 0);
+}
+
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
   return new pcas_skip_list_wrapper(opt);
 }
 
 pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
+  bool recovery = FileExists(opt.pool_path.c_str());
 #ifdef PMEM
   pmwcas::InitLibrary(
       pmwcas::PMDKAllocator::Create(opt.pool_path.c_str(), "skip_list_layout",
@@ -16,11 +22,16 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
       reinterpret_cast<pmwcas::PMDKAllocator*>(pmwcas::Allocator::Get());
   auto root_obj = reinterpret_cast<pcas_skip_list_wrapper_pmdk_obj *>(
       allocator->GetRoot(sizeof(pcas_skip_list_wrapper_pmdk_obj)));
-  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->list_),
-                            sizeof(pmwcas::CASDSkipList), false);
-  slist_ = root_obj->list_;
-  new (slist_) pmwcas::CASDSkipList;
-  pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
+  if (recovery) {
+    slist_ = root_obj->list_;
+    pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
+  } else {
+    allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->list_),
+                              sizeof(pmwcas::CASDSkipList), false);
+    slist_ = root_obj->list_;
+    new (slist_) pmwcas::CASDSkipList;
+    pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
+  }
 #else
   pmwcas::InitLibrary(
       pmwcas::DefaultAllocator::Create, pmwcas::DefaultAllocator::Destroy,
