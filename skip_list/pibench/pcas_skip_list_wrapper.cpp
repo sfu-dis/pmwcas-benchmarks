@@ -26,6 +26,8 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
     slist_ = root_obj->list_;
     // XXX(shiges): Hack the epoch manager
     new (slist_->GetEpoch()) pmwcas::EpochManager;
+    pmwcas::Status s = slist_->GetEpoch()->Initialize();
+    RAW_CHECK(s.ok(), "epoch init failure");
     pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
   } else {
     allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->list_),
