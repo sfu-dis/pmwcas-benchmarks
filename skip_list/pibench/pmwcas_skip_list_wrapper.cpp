@@ -24,7 +24,7 @@ pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
       allocator->GetRoot(sizeof(pmwcas_skip_list_wrapper_pmdk_obj)));
   if (recovery) {
     pool_ = root_obj->desc_pool_;
-    pool_->Recovery(0, false);
+    pool_->Recovery(opt.num_threads, false);
     slist_ = root_obj->mwlist_;
   } else {
     allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
