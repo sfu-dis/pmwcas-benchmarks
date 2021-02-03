@@ -13,5 +13,5 @@ endif ()
 add_library(pcas_skip_list_wrapper SHARED pcas_skip_list_wrapper.cpp)
 target_link_libraries(pcas_skip_list_wrapper skiplist ${PMWCAS_TEST_LINK_LIBS} ${PMWCAS_APPS_LINK_LIBS})
 
-# add_library(pmwcas_skip_list_wrapper SHARED pmwcas_skip_list_wrapper.cpp)
-# target_link_libraries(pmwcas_skip_list_wrapper skiplist ${PMWCAS_TEST_LINK_LIBS} ${PMWCAS_APPS_LINK_LIBS})
+add_library(pmwcas_skip_list_wrapper SHARED pmwcas_skip_list_wrapper.cpp)
+target_link_libraries(pmwcas_skip_list_wrapper skiplist ${PMWCAS_TEST_LINK_LIBS} ${PMWCAS_APPS_LINK_LIBS})

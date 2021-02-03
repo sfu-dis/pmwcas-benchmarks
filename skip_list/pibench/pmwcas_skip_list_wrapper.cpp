@@ -1,10 +1,10 @@
-#include "pcas_skip_list_wrapper.hpp"
+#include "pmwcas_skip_list_wrapper.hpp"
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  return new pcas_skip_list_wrapper(opt);
+  return new pmwcas_skip_list_wrapper(opt);
 }
 
-pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
+pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
 #ifdef PMEM
   pmwcas::InitLibrary(
@@ -14,22 +14,27 @@ pcas_skip_list_wrapper::pcas_skip_list_wrapper(const tree_options_t& opt)
       pmwcas::LinuxEnvironment::Destroy);
   auto allocator =
       reinterpret_cast<pmwcas::PMDKAllocator*>(pmwcas::Allocator::Get());
-  auto root_obj = reinterpret_cast<pcas_skip_list_wrapper_pmdk_obj *>(
-      allocator->GetRoot(sizeof(pcas_skip_list_wrapper_pmdk_obj)));
-  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->list_),
-                            sizeof(pmwcas::CASDSkipList), false);
-  slist_ = root_obj->list_;
-  new (slist_) pmwcas::CASDSkipList;
-  pmwcas::PMAllocHelper::Get()->Initialize(&slist_->table_);
+  auto root_obj = reinterpret_cast<pmwcas_skip_list_wrapper_pmdk_obj *>(
+      allocator->GetRoot(sizeof(pmwcas_skip_list_wrapper_pmdk_obj)));
+  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
+                            sizeof(pmwcas::DescriptorPool), false);
+  allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->mwlist_),
+                            sizeof(pmwcas::MwCASDSkipList), false);
+  pool_ = root_obj->desc_pool_;
+  slist_ = root_obj->mwlist_;
+  new (pool_) pmwcas::DescriptorPool(100000, opt.num_threads, false);
+  new (slist_) pmwcas::MwCASDSkipList(pool_);
 #else
   pmwcas::InitLibrary(
       pmwcas::DefaultAllocator::Create, pmwcas::DefaultAllocator::Destroy,
       pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
-  slist_ = new pmwcas::CASDSkipList();
+  
+  pool_ = new pmwcas::DescriptorPool(100000, opt.num_threads, false);
+  slist_ = new pmwcas::MwCASDSkipList();
 #endif
 }
 
-pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
+pmwcas_skip_list_wrapper::~pmwcas_skip_list_wrapper() {
   std::cout << "Sanity checking...\n";
   {
     pmwcas::EpochGuard guard(slist_->GetEpoch());
@@ -38,7 +43,7 @@ pcas_skip_list_wrapper::~pcas_skip_list_wrapper() {
   pmwcas::Thread::ClearRegistry(true);
 }
 
-bool pcas_skip_list_wrapper::find(const char* key, size_t key_sz,
+bool pmwcas_skip_list_wrapper::find(const char* key, size_t key_sz,
                                   char* value_out) {
   pmwcas::nv_ptr<pmwcas::SkipListNode> vnode = nullptr;
   pmwcas::Slice k(key, key_sz);
@@ -56,25 +61,25 @@ bool pcas_skip_list_wrapper::find(const char* key, size_t key_sz,
   }
 }
 
-bool pcas_skip_list_wrapper::insert(const char* key, size_t key_sz,
+bool pmwcas_skip_list_wrapper::insert(const char* key, size_t key_sz,
                                     const char* value, size_t value_sz) {
   pmwcas::Slice k(key, key_sz);
   pmwcas::Slice v(value, value_sz);
   return slist_->Insert(k, v, false).ok();
 }
 
-bool pcas_skip_list_wrapper::update(const char* key, size_t key_sz,
+bool pmwcas_skip_list_wrapper::update(const char* key, size_t key_sz,
                                     const char* value, size_t value_sz) {
   // TODO(shiges): implementation
   return false;
 }
 
-bool pcas_skip_list_wrapper::remove(const char* key, size_t key_sz) {
+bool pmwcas_skip_list_wrapper::remove(const char* key, size_t key_sz) {
   pmwcas::Slice k(key, key_sz);
   return slist_->Delete(k, false).ok();
 }
 
-int pcas_skip_list_wrapper::scan(const char* key, size_t key_sz, int scan_sz,
+int pmwcas_skip_list_wrapper::scan(const char* key, size_t key_sz, int scan_sz,
                                  char*& values_out) {
   // XXX(shiges): We simply keep a 4KB buffer here. A key-value
   // pair in our normal workload takes 16B and we only scan for
@@ -86,7 +91,7 @@ int pcas_skip_list_wrapper::scan(const char* key, size_t key_sz, int scan_sz,
   int scanned = 0;
 
   pmwcas::Slice k(key, key_sz);
-  pmwcas::CASDSkipListCursor cursor(slist_, k, false);
+  pmwcas::MwCASDSkipListCursor cursor(slist_, k, false);
   DCHECK(slist_->GetEpoch()->IsProtected());
 
   if (slist_->IsHead(cursor.Curr())) {
