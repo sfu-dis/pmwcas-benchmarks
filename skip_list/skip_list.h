@@ -224,6 +224,7 @@ Status DSkipListBase<DSkipListImpl>::Traverse(const Slice& key, nv_ptr<SkipListN
   while (curr_level_idx > 0) {
     // Descend until the right isn't tail
     auto right = GetNext(curr_node, curr_level_idx);
+    DCHECK(right);
     if (right == &tail_) {
       array->Set(curr_level_idx, curr_node, right);
       --curr_level_idx;
@@ -251,6 +252,7 @@ Status DSkipListBase<DSkipListImpl>::Traverse(const Slice& key, nv_ptr<SkipListN
          memcmp(key.data(), curr_node->GetKey(), key.size()) > 0);
   while (true) {
     auto right = GetNext(curr_node, curr_level_idx);
+    DCHECK(right);
     if (right == &tail_) {
       // Traversal reaches tail - not found
       array->Set(curr_level_idx, curr_node, right);

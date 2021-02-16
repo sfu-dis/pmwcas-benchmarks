@@ -14,7 +14,8 @@ CASDSkipList::CASDSkipList() {
     tail_.prev[i] = &head_;
   }
 
-  height = head_.height = tail_.height = 1;
+  head_.height = tail_.height = SKIPLIST_MAX_HEIGHT;
+  height = 1;
   DCHECK(head_.key_size == 0);
   DCHECK(head_.payload_size == 0);
   DCHECK(tail_.key_size == 0);
@@ -141,6 +142,8 @@ retry:
       left = &head_;
       right = &tail_;
     }
+    DCHECK(left->height >= i);
+    DCHECK(right->height >= i);
 
     node->prev[i] = left;
     node->next[i] = right;
@@ -347,7 +350,8 @@ MwCASDSkipList::MwCASDSkipList(DescriptorPool* pool) : desc_pool_(pool) {
     tail_.prev[i] = &head_;
   }
 
-  height = head_.height = tail_.height = 1;
+  head_.height = tail_.height = SKIPLIST_MAX_HEIGHT;
+  height = 1;
   DCHECK(head_.key_size == 0);
   DCHECK(head_.payload_size == 0);
   DCHECK(tail_.key_size == 0);
