@@ -131,8 +131,6 @@ struct DSkipListTest : public PerformanceTest {
       }
     }
     barrier3_.CountAndWait();
-
-    Thread::ClearRegistry(true);
   }
 };
 
