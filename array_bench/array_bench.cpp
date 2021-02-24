@@ -68,10 +68,12 @@ void DumpArgs() {
 #endif
 }
 
+#ifdef PMEM
 struct PMDKRootObj {
   PMEMoid desc_pool;
   PMEMoid test_array;
 };
+#endif
 
 struct MwCas : public Benchmark {
   MwCas() : Benchmark{}, previous_dump_run_ticks_{}, cumulative_stats_{} {
@@ -572,6 +574,7 @@ Status RunMwCas() {
   return Status::OK();
 }
 
+#ifdef PMEM
 Status RunRecovery() {
   RecoveryBenchmark test{};
   std::cout << "Starting benchmark..." << std::endl;
@@ -579,6 +582,7 @@ Status RunRecovery() {
 
   return Status::OK();
 }
+#endif
 
 void RunBenchmark() {
   std::string benchmark_name{};
@@ -590,7 +594,11 @@ void RunBenchmark() {
     if ("mwcas" == benchmark_name) {
       s = RunMwCas();
     } else if ("recovery" == benchmark_name) {
+#ifdef PMEM
       s = RunRecovery();
+#else
+      fprintf(stderr, "recovery benchmark is only available under PMDK backend!\n");
+#endif
     } else {
       fprintf(stderr, "unknown benchmark name: %s\n", benchmark_name.c_str());
     }

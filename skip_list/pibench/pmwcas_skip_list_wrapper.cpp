@@ -42,7 +42,7 @@ pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
       pmwcas::LinuxEnvironment::Create, pmwcas::LinuxEnvironment::Destroy);
   
   pool_ = new pmwcas::DescriptorPool(100000, opt.num_threads, false);
-  slist_ = new pmwcas::MwCASDSkipList();
+  slist_ = new pmwcas::MwCASDSkipList(pool_);
 #endif
 }
 
