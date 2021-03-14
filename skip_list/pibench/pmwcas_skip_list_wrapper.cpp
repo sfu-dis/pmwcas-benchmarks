@@ -52,6 +52,13 @@ pmwcas_skip_list_wrapper::~pmwcas_skip_list_wrapper() {
     pmwcas::EpochGuard guard(slist_->GetEpoch());
     slist_->SanityCheck(false);
   }
+#ifdef PMEM
+  slist_->~MwCASDSkipList();
+  pool_->~DescriptorPool();
+#else
+  delete slist_;
+  delete pool_;
+#endif
   pmwcas::Thread::ClearRegistry(true);
 }
 
