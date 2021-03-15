@@ -13,9 +13,7 @@ extern "C" tree_api* create_tree(const tree_options_t& opt) {
 
 pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
-  // FIXME(shiges): We disable recovery in throughput benchmarks.
-  // bool recovery = FileExists(opt.pool_path.c_str());
-  bool recovery = false;
+  bool recovery = FileExists(opt.pool_path.c_str());;
   uint32_t num_threads = opt.num_threads + 1; // account for the loading thread
   uint32_t desc_pool_size = kDescriptorsPerThread * num_threads;
 #ifdef PMEM
@@ -32,6 +30,12 @@ pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
     pool_ = root_obj->desc_pool_;
     pool_->Recovery(num_threads, false);
     slist_ = root_obj->mwlist_;
+    allocator->FreeOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_));
+    allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
+                              sizeof(pmwcas::DescriptorPool), false);
+    pool_ = root_obj->desc_pool_;
+    new (pool_) pmwcas::DescriptorPool(desc_pool_size, num_threads, false);
+    slist_->desc_pool_ = pool_;
   } else {
     allocator->AllocateOffset(reinterpret_cast<uint64_t *>(&root_obj->desc_pool_),
                               sizeof(pmwcas::DescriptorPool), false);
