@@ -13,7 +13,9 @@ extern "C" tree_api* create_tree(const tree_options_t& opt) {
 
 pmwcas_skip_list_wrapper::pmwcas_skip_list_wrapper(const tree_options_t& opt)
     : options_(opt) {
-  bool recovery = FileExists(opt.pool_path.c_str());
+  // FIXME(shiges): We disable recovery in throughput benchmarks.
+  // bool recovery = FileExists(opt.pool_path.c_str());
+  bool recovery = false;
   uint32_t num_threads = opt.num_threads + 1; // account for the loading thread
   uint32_t desc_pool_size = kDescriptorsPerThread * num_threads;
 #ifdef PMEM
